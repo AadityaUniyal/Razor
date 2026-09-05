@@ -1,0 +1,48 @@
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Python runtime and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Local database and lock files
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Deployment and serverless
+.vercel/
+
+# IDE and OS metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Agent workspaces
+.agents/
+
+# Tests and internal specs
+tests/
+docs/

@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RazorRescue — AI Revenue Recovery Orchestrator</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <!-- Clerk Frontend SDK -->
+  <script async crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js" type="text/javascript"></script>
+</head>
+<body>
+
+  <!-- AUTHENTICATION VIEW -->
+  <section class="auth-container" id="authPanel">
+    <div class="auth-hero">
+      <div class="logo-badge">ENTERPRISE REVENUE OPERATIONS</div>
+      <h1>Don't chase every failed payment.<br>Understand it first.</h1>
+      <p>RazorRescue is an AI-powered, policy-controlled revenue recovery orchestrator that determines which payments genuinely require intervention, tracks customer promises, and proves net recovered revenue.</p>
+      
+      <div class="auth-features">
+        <div class="auth-feature-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span>Deterministic Financial Safety: LLMs never directly touch money</span>
+        </div>
+        <div class="auth-feature-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+          <span>Avoid Unnecessary Chasing: Verifies uncertain payments before contacting</span>
+        </div>
+        <div class="auth-feature-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Multi-lingual Promise Intelligence: Resolves Hinglish commitments to timestamps</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="auth-form-wrap">
+      <div class="auth-card">
+        <!-- PRIMARY CLERK AUTHENTICATION -->
+        <div id="clerkAuthSection">
+          <div id="clerkSignInContainer" style="min-height:280px;"></div>
+          <div id="clerkLoadingPlaceholder" style="text-align:center; padding:24px 10px; color:#64748b; font-size:13px;">
+            <div class="pulse-dot" style="display:inline-block; margin-bottom:10px;"></div>
+            <div style="font-weight:600; margin-bottom:4px;">Enterprise Authentication</div>
+            <div id="clerkStatusHelp" style="font-size:12px; color:#94a3b8; line-height:1.5;">
+              Connecting to Clerk... Provide <code>CLERK_PUBLISHABLE_KEY</code> in environment variables or enter below:
+            </div>
+            <div style="display:flex; gap:6px; margin-top:12px;">
+              <input id="runtimeClerkKeyInput" class="form-control" style="font-size:11px; padding:6px 10px;" placeholder="pk_test_...">
+              <button type="button" id="btnApplyClerkKey" class="btn-primary" style="width:auto; padding:6px 14px; font-size:11px;">Connect</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- DIRECT OPERATOR SIGN-IN -->
+        <div id="directAuthSection" style="margin-top:20px; border-top:1px solid #e2e8f0; padding-top:16px;">
+          <h3 style="font-size:14px; margin-bottom:4px;">Direct Console Sign-In</h3>
+          <p class="auth-sub" style="font-size:12px; margin-bottom:12px;">Enter authorized operator credentials.</p>
+
+          <form id="loginForm">
+            <div class="form-group">
+              <label>Operator Email</label>
+              <input name="email" type="email" class="form-control" value="" placeholder="operator@razorrescue.com" required>
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input name="password" type="password" class="form-control" value="" placeholder="••••••••" required>
+            </div>
+            <button type="submit" class="btn-primary">Sign In to Dashboard</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MAIN APPLICATION LAYOUT -->
+  <div id="appPanel" class="app-container hidden">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="brand-header">
+        <div class="brand-title">RAZOR<span>RESCUE</span></div>
+        <div class="brand-desc">AI Revenue Recovery Orchestrator</div>
+      </div>
+
+      <nav class="side-nav" id="nav">
+        <button data-view="overview" class="active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          Overview
+        </button>
+        <button data-view="queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1"/></svg>
+          Recovery Queue
+        </button>
+        <button data-view="promises">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Promises to Pay
+        </button>
+        <button data-view="ai">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 10.5"/></svg>
+          AI Sandbox & Benchmarks
+        </button>
+        <button data-view="audit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          Decision Ledger
+        </button>
+        <button data-view="analytics">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          Analytics & ROI
+        </button>
+        <button data-view="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Policy & Health
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="env-pill">
+          <span class="pulse-dot"></span>
+          LIVE PRODUCTION
+        </div>
+      </div>
+    </aside>
+
+    <!-- CONTENT AREA -->
+    <main class="main-content">
+      <header class="top-header">
+        <div class="header-left">
+          <p class="breadcrumb" id="crumb">OPERATIONS / OVERVIEW</p>
+          <h2 id="pageTitle">Operations Overview</h2>
+        </div>
+
+        <div class="header-right">
+          <span class="status-badge healthy" id="systemHealthBadge">
+            <span class="pulse-dot"></span>
+            ALL SYSTEMS OPERATIONAL
+          </span>
+          <div id="clerkUserButton" style="display:inline-flex; align-items:center;"></div>
+          <span id="userEmail" style="font-size:13px; font-weight:600; color:var(--text-muted);"></span>
+          <button id="logoutBtn" class="btn-secondary">Sign Out</button>
+        </div>
+      </header>
+
+      <!-- DYNAMIC VIEW CONTAINER -->
+      <div id="view"></div>
+
+      <!-- LIVE FINTECH TOAST NOTIFICATION CONTAINER -->
+      <div id="toastContainer" class="toast-container"></div>
+    </main>
+  </div>
+
+  <!-- ========================================================================
+       TEMPLATES
+       ======================================================================== -->
+
+  <!-- OVERVIEW TEMPLATE -->
+  <template id="overviewTemplate">
+    <section class="metric-grid" id="stats"></section>
+
+    <div style="display:grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; margin-bottom: 24px;">
+      <article class="panel">
+        <div class="panel-header">
+          <h3>Recovery Funnel & Conversion</h3>
+          <span class="badge wait">Live Funnel</span>
+        </div>
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">Track how revenue flows through event detection, policy validation, and final recovery.</p>
+        <div id="funnel" class="funnel-container"></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h3>Live Recovery Feed</h3>
+          <span class="badge recovered">WebSocket Active</span>
+        </div>
+        <div id="activity" class="activity-feed" style="max-height: 280px; overflow-y: auto;"></div>
+      </article>
+    </div>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h3>Cases Requiring Operator Attention</h3>
+        <button class="btn-secondary" data-view="queue">Open Recovery Queue</button>
+      </div>
+      <div id="attentionQueue"></div>
+    </section>
+  </template>
+
+  <!-- RECOVERY QUEUE TEMPLATE -->
+  <template id="queueTemplate">
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>Revenue Recovery Queue</h3>
+          <p style="font-size:12px; color:var(--text-muted);">Click any case to inspect the Policy Decision Explainer, strategy scores, and audit trail.</p>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+          <input type="text" id="queueSearchInput" class="form-control" placeholder="Search customer or case ID..." style="width:220px; padding:6px 12px; font-size:12px;">
+          <div class="filter-pills" id="queueFilterPills">
+            <button class="filter-pill active" data-filter="ALL">All</button>
+            <button class="filter-pill" data-filter="WAIT">Wait / Grace</button>
+            <button class="filter-pill" data-filter="VERIFY">Verify</button>
+            <button class="filter-pill" data-filter="RECOVER">Recover</button>
+            <button class="filter-pill" data-filter="RECOVERED">Recovered</button>
+            <button class="filter-pill" data-filter="ESCALATED">Escalated</button>
+            <button class="filter-pill" data-filter="STOP">Stopped</button>
+          </div>
+          <span class="badge" id="queueCount">0 Cases</span>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Case ID</th>
+              <th>Customer</th>
+              <th>Amount</th>
+              <th>Risk Category</th>
+              <th>State</th>
+              <th>Attempts</th>
+              <th>Selected Action</th>
+              <th>Score</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody id="queueTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- CASE DETAIL & DECISION EXPLAINER MODAL / DRAWER -->
+    <div id="caseDetailDrawer" class="hidden">
+      <section class="panel" style="border-top: 4px solid var(--brand-blue);">
+        <div class="panel-header">
+          <div>
+            <span class="breadcrumb" id="detailCaseId">CASE DETAILS</span>
+            <h3 id="detailHeaderTitle">Case Detail</h3>
+          </div>
+          <button id="closeDetailBtn" class="btn-secondary">Close Inspector</button>
+        </div>
+
+        <div class="case-detail-layout">
+          <!-- Left: Decision Explainer & Case Profile -->
+          <div>
+            <div id="decisionExplainerCard" class="decision-explainer-card">
+              <div class="explainer-title">
+                <h4>Decision Explainer: Why this action?</h4>
+                <span id="explainerPolicyResult" class="badge">APPROVED</span>
+              </div>
+              <p id="explainerReasonText" style="font-size: 13px; margin-bottom: 12px;"></p>
+              
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Strategy Scores (Expected Value - Cost - Disturbance)</div>
+              <div id="strategyScoresGrid" class="strategy-scores-grid"></div>
+
+              <div class="factor-checklist" id="deterministicFactorsList"></div>
+            </div>
+
+            <!-- Customer & Financial Profile -->
+            <div class="panel" style="background:#f8fafc; margin-bottom:16px;">
+              <h4 style="font-size: 13px; margin-bottom: 8px;">Customer & Exposure Profile</h4>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:12px;">
+                <div><b>Customer:</b> <span id="detailCustName">-</span></div>
+                <div><b>Email:</b> <span id="detailCustEmail">-</span></div>
+                <div><b>Amount at Risk:</b> <span id="detailAmount">-</span></div>
+                <div><b>Net Recovered Value:</b> <span id="detailNetVal">-</span></div>
+                <div><b>Failure Category:</b> <span id="detailCategory">-</span></div>
+                <div><b>Promise Deadline:</b> <span id="detailPromiseTime">None</span></div>
+              </div>
+            </div>
+
+            <!-- Action Records & Notifications -->
+            <div class="panel">
+              <h4 style="font-size: 13px; margin-bottom: 8px;">Dispatched Communications & Interventions</h4>
+              <div id="detailActionRecords"></div>
+            </div>
+          </div>
+
+          <!-- Right: Operator Controls & Timeline -->
+          <div>
+            <!-- Manual Operator Controls -->
+            <div class="panel">
+              <h4 style="font-size: 13px; margin-bottom: 8px;">Operator Bounded Overrides</h4>
+              <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                <button class="btn-secondary" id="btnActionVerify">Verify Gateway</button>
+                <button class="btn-secondary" id="btnActionLink">Send Recovery Link</button>
+                <button class="btn-secondary" id="btnActionEscalate">Escalate to Human</button>
+                <button class="btn-secondary" id="btnActionCapture" style="background:#ecfdf5; color:#065f46; border-color:#a7f3d0;">Record Direct Capture</button>
+                <button class="btn-secondary" id="btnActionStop" style="color:#b91c1c;">Stop Workflow</button>
+              </div>
+            </div>
+
+            <!-- Case Timeline -->
+            <div class="panel">
+              <h4 style="font-size: 13px; margin-bottom: 8px;">Case Event Timeline</h4>
+              <div id="detailTimeline"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+
+
+  <!-- PROMISES TO PAY TEMPLATE -->
+  <template id="promisesTemplate">
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>Tracked Customer Promises to Pay</h3>
+          <p style="font-size:12px; color:var(--text-muted);">Extracted automatically from customer natural language via Groq AI & resolved to UTC verification windows.</p>
+        </div>
+        <span class="badge" id="promiseCountBadge">0 Promises</span>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Case ID</th>
+              <th>Customer</th>
+              <th>Amount</th>
+              <th>Customer Commitment</th>
+              <th>Promised Verification Time</th>
+              <th>Confidence</th>
+              <th>Status</th>
+              <th>Follow-up Sent</th>
+            </tr>
+          </thead>
+          <tbody id="promisesTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </template>
+
+  <!-- AI SANDBOX & BENCHMARKS TEMPLATE -->
+  <template id="aiTemplate">
+    <div class="sandbox-grid">
+      <!-- Left: Interactive Sandbox -->
+      <section class="panel">
+        <div class="panel-header">
+          <h3>Interactive AI Language Sandbox</h3>
+          <span class="badge wait" id="aiActiveProviderBadge">Groq + Gemini + Fallback</span>
+        </div>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Type any customer message in English, Hindi, or Hinglish to see live intent extraction, provider benchmark, confidence, and policy proposal.</p>
+
+        <div class="sim-chips-wrap">
+          <span class="sim-chip" data-aimsg="Kal salary aane ke baad pakka payment kar dunga.">"Kal salary aane ke baad..."</span>
+          <span class="sim-chip" data-aimsg="Monday shaam tak transfer kar dunga bhai.">"Monday shaam tak transfer..."</span>
+          <span class="sim-chip" data-aimsg="Maine UPI se pay kar diya hai already, check your system.">"Maine UPI se pay kar diya..."</span>
+          <span class="sim-chip" data-aimsg="mat bhejo mujhe koi message, unsubscribe kar do">"mat bhejo mujhe koi..."</span>
+          <span class="sim-chip" data-aimsg="Stop messaging me, unsubscribed.">"Stop messaging me..."</span>
+          <span class="sim-chip" data-aimsg="This is a fraudulent charge, I will dispute this.">"Fraud charge dispute..."</span>
+        </div>
+
+        <form id="aiSandboxForm">
+          <textarea id="aiMessageInput" class="form-control" rows="3" placeholder="Enter customer message..." required></textarea>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:10px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <label style="font-size:12px; font-weight:600; color:var(--text-main);">Provider:</label>
+              <select id="aiProviderSelect" class="form-control" style="width:auto; padding:4px 10px; font-size:12px;">
+                <option value="auto">Auto (Groq -> Gemini -> Fallback)</option>
+                <option value="groq">Groq (LLaMA 3.3 70B)</option>
+                <option value="gemini">Google Gemini (2.0 Flash)</option>
+                <option value="fallback">Deterministic Fallback (Hinglish Rules)</option>
+              </select>
+            </div>
+            <button type="submit" class="btn-primary" style="width:auto; padding:8px 18px;">Analyze Message</button>
+          </div>
+        </form>
+
+        <div style="margin-top:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <h4 style="font-size:12px; text-transform:uppercase; color:var(--text-muted); margin:0;">Structured AI Output</h4>
+            <div id="aiTelemetryBadge" style="font-size:11px; font-family:'JetBrains Mono', monospace; color:var(--text-muted);"></div>
+          </div>
+          <pre id="aiResultJson" class="sandbox-result-box">Awaiting input...</pre>
+        </div>
+      </section>
+
+      <!-- Right: AI Evaluation Matrix -->
+      <section class="panel">
+        <div class="panel-header">
+          <h3>AI Evaluation & Benchmark Matrix</h3>
+          <span class="badge recovered" id="aiAccuracyBadge">Accuracy: 93.8%</span>
+        </div>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Continuous evaluation of AI classification against pre-labelled ground truth benchmark scenarios.</p>
+
+        <div class="metric-grid" style="grid-template-columns:1fr 1fr; margin-bottom:16px;">
+          <div class="metric-card" style="padding:12px;">
+            <div class="metric-label">Promise Detection</div>
+            <div class="metric-val highlight-green" id="metricPromiseRate">100%</div>
+          </div>
+          <div class="metric-card" style="padding:12px;">
+            <div class="metric-label">Policy Acceptance</div>
+            <div class="metric-val highlight-blue" id="metricPolicyAccept">91.5%</div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Test Message</th>
+                <th>Expected</th>
+                <th>Predicted</th>
+                <th>Confidence</th>
+                <th>Matched</th>
+              </tr>
+            </thead>
+            <tbody id="aiBenchmarkTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </template>
+
+  <!-- DECISION LEDGER TEMPLATE -->
+  <template id="auditTemplate">
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h3>Immutable Decision Ledger</h3>
+          <p style="font-size:12px; color:var(--text-muted);">Auditable trace answering "Why did the system take this action?" with deterministic factors, strategy scores, and policy results.</p>
+        </div>
+        <span class="badge">Append-Only Audit</span>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Case ID</th>
+              <th>Selected Action</th>
+              <th>Policy Result</th>
+              <th>Policy Reason</th>
+              <th>AI Intent</th>
+            </tr>
+          </thead>
+          <tbody id="auditTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </template>
+
+  <!-- ANALYTICS TEMPLATE -->
+  <template id="analyticsTemplate">
+    <section class="metric-grid" id="analyticsStatsGrid"></section>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px;">
+      <article class="panel">
+        <div class="panel-header">
+          <h3>Revenue at Risk vs Recovered by Category</h3>
+          <span class="badge">Breakdown</span>
+        </div>
+        <div id="analyticsCategoryBars"></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h3>Operational ROI & Net Recovered Value</h3>
+          <span class="badge recovered">Net Margin</span>
+        </div>
+        <div id="analyticsRoiSummary" style="font-size:13px; line-height:1.8;"></div>
+      </article>
+    </div>
+  </template>
+
+  <!-- SETTINGS & HEALTH TEMPLATE -->
+  <template id="settingsTemplate">
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+      <section class="panel">
+        <div class="panel-header">
+          <h3>Active Recovery Policy Parameters</h3>
+          <span class="badge wait" id="policyVersionBadge">v1.2</span>
+        </div>
+        <div id="policyConfigList"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h3>Infrastructure & Subsystem Health</h3>
+          <span class="badge healthy">Diagnostics</span>
+        </div>
+        <div id="systemHealthDetails"></div>
+      </section>
+    </div>
+  </template>
+
+  <!-- APP SCRIPT -->
+  <script src="/static/app.js"></script>
+</body>
+</html>
