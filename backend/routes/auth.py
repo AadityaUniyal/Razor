@@ -13,9 +13,30 @@ from database.models import User, Role
 router = APIRouter(prefix="/api", tags=["auth"])
 
 
+from fastapi import Request
+
 @router.post("/register")
 @router.post("/auth/register")
-def register(email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+async def register(request: Request, db: Session = Depends(get_db)):
+    email = ""
+    password = ""
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            email = str(body.get("email", "")).strip()
+            password = str(body.get("password", "")).strip()
+        except Exception:
+            pass
+    if not email:
+        try:
+            form = await request.form()
+            email = str(form.get("email", "")).strip()
+            password = str(form.get("password", "")).strip()
+        except Exception:
+            pass
+    if not email or not password:
+        raise HTTPException(400, "Email and password are required")
     if len(password) < 8:
         raise HTTPException(400, "Password must contain at least 8 characters")
     existing = db.scalar(select(User).where(User.email == email))

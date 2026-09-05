@@ -648,6 +648,13 @@ document.body.addEventListener("submit", async (e) => {
     }
   }
 
+  // Sign Up
+  if (e.target.id === "signUpForm") {
+    e.preventDefault();
+    const data = new FormData(e.target);
+    await api("/api/register", { method: "POST", body: new URLSearchParams(data) });
+    await bootApp();
+  }
 
   // AI Sandbox Form
   if (e.target.id === "aiSandboxForm") {
@@ -783,8 +790,36 @@ function connectWebSocket() {
 // AUTHENTICATION & LOGIN UI HANDLERS
 // ==============================================================================
 
-function setupAuthTabs() {
-  const tabClerk = $("#tabClerk");
+function simpleTabSwitcher() {
+  const tabSignIn = $("#tabSignIn");
+  const tabSignUp = $("#tabSignUp");
+  const signInForm = $("#signInForm");
+  const signUpForm = $("#signUpForm");
+
+  function switchTo(mode) {
+    if (mode === "signin") {
+      tabSignIn?.classList.add("active");
+      tabSignUp?.classList.remove("active");
+      signInForm?.classList.remove("hidden");
+      signUpForm?.classList.add("hidden");
+    } else {
+      tabSignUp?.classList.add("active");
+      tabSignIn?.classList.remove("active");
+      signUpForm?.classList.remove("hidden");
+      signInForm?.classList.add("hidden");
+    }
+  }
+
+  if (tabSignIn && tabSignUp) {
+    tabSignIn.onclick = () => switchTo("signin");
+    tabSignUp.onclick = () => switchTo("signup");
+  }
+
+  // Initialize to Sign In view
+  switchTo("signin");
+}
+
+
   const tabOperator = $("#tabOperator");
   const clerkPane = $("#clerkAuthSection");
   const operatorPane = $("#directAuthSection");
@@ -987,7 +1022,7 @@ async function initClerkAuth() {
       await navigate("overview");
       return true;
     } else {
-      // Mount Clerk Sign-In Component
+      // Removed Clerk sign‑out call – not needednt
       const container = $("#clerkSignInContainer");
       if (container) {
         container.innerHTML = "";
