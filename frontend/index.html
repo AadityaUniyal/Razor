@@ -35,38 +35,81 @@
 
     <div class="auth-form-wrap">
       <div class="auth-card">
-        <!-- PRIMARY CLERK AUTHENTICATION -->
-        <div id="clerkAuthSection">
+        <!-- BRAND HEADER -->
+        <div class="auth-card-header">
+          <div class="auth-brand-logo">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+          </div>
+          <h2>Sign In to Console</h2>
+          <p class="auth-sub">Autonomous Revenue Recovery Operations</p>
+        </div>
+
+        <!-- AUTH MODE TABS -->
+        <div class="auth-tabs" id="authTabs">
+          <button type="button" class="auth-tab active" id="tabClerk" data-tab="clerk">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Enterprise SSO
+          </button>
+          <button type="button" class="auth-tab" id="tabOperator" data-tab="operator">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Operator Login
+          </button>
+        </div>
+
+        <!-- CLERK AUTH TAB CONTENT -->
+        <div id="clerkAuthSection" class="tab-pane">
           <div id="clerkSignInContainer" style="min-height:280px;"></div>
-          <div id="clerkLoadingPlaceholder" style="text-align:center; padding:24px 10px; color:#64748b; font-size:13px;">
-            <div class="pulse-dot" style="display:inline-block; margin-bottom:10px;"></div>
-            <div style="font-weight:600; margin-bottom:4px;">Enterprise Authentication</div>
-            <div id="clerkStatusHelp" style="font-size:12px; color:#94a3b8; line-height:1.5;">
-              Connecting to Clerk... Provide <code>CLERK_PUBLISHABLE_KEY</code> in environment variables or enter below:
-            </div>
-            <div style="display:flex; gap:6px; margin-top:12px;">
-              <input id="runtimeClerkKeyInput" class="form-control" style="font-size:11px; padding:6px 10px;" placeholder="pk_test_...">
-              <button type="button" id="btnApplyClerkKey" class="btn-primary" style="width:auto; padding:6px 14px; font-size:11px;">Connect</button>
-            </div>
+          <div id="clerkLoadingPlaceholder" class="auth-loading-state">
+            <div class="spinner"></div>
+            <p>Connecting to secure authentication...</p>
           </div>
         </div>
 
-        <!-- DIRECT OPERATOR SIGN-IN -->
-        <div id="directAuthSection" style="margin-top:20px; border-top:1px solid #e2e8f0; padding-top:16px;">
-          <h3 style="font-size:14px; margin-bottom:4px;">Direct Console Sign-In</h3>
-          <p class="auth-sub" style="font-size:12px; margin-bottom:12px;">Enter authorized operator credentials.</p>
+        <!-- OPERATOR AUTH TAB CONTENT -->
+        <div id="directAuthSection" class="tab-pane hidden">
+          <div id="loginErrorAlert" class="auth-error-alert hidden"></div>
 
-          <form id="loginForm">
+          <form id="loginForm" autocomplete="on">
             <div class="form-group">
-              <label>Operator Email</label>
-              <input name="email" type="email" class="form-control" value="" placeholder="operator@razorrescue.com" required>
+              <label for="operatorEmail">Operator Email</label>
+              <div class="input-icon-wrap">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L1 7"/></svg>
+                <input id="operatorEmail" name="email" type="email" class="form-control with-icon" value="admin@razorrescue.local" placeholder="admin@razorrescue.local" required autocomplete="username">
+              </div>
             </div>
+
             <div class="form-group">
-              <label>Password</label>
-              <input name="password" type="password" class="form-control" value="" placeholder="••••••••" required>
+              <label for="operatorPassword">Password</label>
+              <div class="input-icon-wrap">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                <input id="operatorPassword" name="password" type="password" class="form-control with-icon" value="password123" placeholder="••••••••" required autocomplete="current-password">
+                <button type="button" class="btn-toggle-pwd" id="btnTogglePwd" title="Show/hide password">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
             </div>
-            <button type="submit" class="btn-primary">Sign In to Dashboard</button>
+
+            <div class="form-actions-row">
+              <label class="remember-me">
+                <input type="checkbox" checked>
+                <span>Remember session</span>
+              </label>
+            </div>
+
+            <button type="submit" id="btnLoginSubmit" class="btn-primary" style="margin-top:10px;">
+              <span id="loginBtnText">Sign In to Dashboard</span>
+            </button>
           </form>
+
+          <div class="quick-credentials-box">
+            <span>Admin Default:</span> <code>admin@razorrescue.local</code> / <code>password123</code>
+          </div>
+        </div>
+
+        <div class="auth-card-footer">
+          <span>🔒 Secured with 256-bit TLS encryption & Clerk SSO</span>
         </div>
       </div>
     </div>

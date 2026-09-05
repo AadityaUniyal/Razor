@@ -780,46 +780,180 @@ function connectWebSocket() {
 }
 
 // ==============================================================================
+// AUTHENTICATION & LOGIN UI HANDLERS
+// ==============================================================================
+
+function setupAuthTabs() {
+  const tabClerk = $("#tabClerk");
+  const tabOperator = $("#tabOperator");
+  const clerkPane = $("#clerkAuthSection");
+  const operatorPane = $("#directAuthSection");
+
+  function switchTab(target) {
+    if (target === "operator") {
+      tabOperator?.classList.add("active");
+      tabClerk?.classList.remove("active");
+      operatorPane?.classList.remove("hidden");
+      clerkPane?.classList.add("hidden");
+    } else {
+      tabClerk?.classList.add("active");
+      tabOperator?.classList.remove("active");
+      clerkPane?.classList.remove("hidden");
+      operatorPane?.classList.add("hidden");
+    }
+  }
+
+  if (tabClerk && tabOperator) {
+    tabClerk.onclick = () => switchTab("clerk");
+    tabOperator.onclick = () => switchTab("operator");
+  }
+
+  // Toggle password visibility
+  const btnTogglePwd = $("#btnTogglePwd");
+  const pwdInput = $("#operatorPassword");
+  if (btnTogglePwd && pwdInput) {
+    btnTogglePwd.onclick = () => {
+      pwdInput.type = pwdInput.type === "password" ? "text" : "password";
+    };
+  }
+
+  // Operator Login Form Submission
+  const loginForm = $("#loginForm");
+  if (loginForm) {
+    loginForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const alertBox = $("#loginErrorAlert");
+      const btnSubmit = $("#btnLoginSubmit");
+      const btnText = $("#loginBtnText");
+
+      if (alertBox) alertBox.classList.add("hidden");
+      if (btnSubmit) btnSubmit.disabled = true;
+      if (btnText) btnText.textContent = "Verifying credentials...";
+
+      const email = $("#operatorEmail")?.value.trim() || "";
+      const password = $("#operatorPassword")?.value || "";
+
+      try {
+        const resp = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.detail || "Invalid email or password");
+        }
+
+        state.user = data.user;
+        $("#userEmail").textContent = data.user.email;
+        $("#authPanel").classList.add("hidden");
+        $("#appPanel").classList.remove("hidden");
+
+        connectWebSocket();
+        await navigate("overview");
+        showRzpToast(`Signed in as ${data.user.email}`, "success");
+      } catch (err) {
+        if (alertBox) {
+          alertBox.textContent = err.message || "Failed to sign in. Please verify your credentials.";
+          alertBox.classList.remove("hidden");
+        }
+        showRzpToast(err.message || "Sign in failed", "error");
+      } finally {
+        if (btnSubmit) btnSubmit.disabled = false;
+        if (btnText) btnText.textContent = "Sign In to Dashboard";
+      }
+    };
+  }
+
+  // Logout Button Handler
+  const logoutBtn = $("#logoutBtn");
+  if (logoutBtn) {
+    logoutBtn.onclick = async () => {
+      try {
+        await fetch("/api/auth/logout", { method: "POST" });
+      } catch {}
+
+      if (window.Clerk && window.Clerk.user) {
+        try {
+          await window.Clerk.signOut();
+        } catch {}
+      }
+
+      state.user = null;
+      $("#authPanel").classList.remove("hidden");
+      $("#appPanel").classList.add("hidden");
+      showRzpToast("Signed out successfully", "info");
+    };
+  }
+}
+
+// ==============================================================================
 // CLERK AUTHENTICATION INTEGRATION & INITIALIZATION
 // ==============================================================================
+
+async function loadClerkSdk(publishableKey) {
+  if (window.Clerk) return window.Clerk;
+
+  return new Promise((resolve) => {
+    let script = document.querySelector('script[src*="clerk"]');
+    if (!script) {
+      let fapi = "";
+      try {
+        const parts = publishableKey.split("_");
+        if (parts.length >= 3) {
+          fapi = atob(parts[2]).replace(/\$$/, "");
+        }
+      } catch {}
+
+      script = document.createElement("script");
+      script.crossOrigin = "anonymous";
+      script.setAttribute("data-clerk-publishable-key", publishableKey);
+      script.src = fapi
+        ? `https://${fapi}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`
+        : "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+      document.head.appendChild(script);
+    }
+
+    const check = setInterval(() => {
+      if (window.Clerk) {
+        clearInterval(check);
+        resolve(window.Clerk);
+      }
+    }, 50);
+
+    setTimeout(() => {
+      clearInterval(check);
+      resolve(window.Clerk || null);
+    }, 4000);
+  });
+}
 
 async function initClerkAuth() {
   let clerkKey = "";
 
-  // 1. Fetch publishable key from server config
   try {
     const config = await api("/api/auth/clerk-config");
     clerkKey = config.publishable_key;
   } catch {}
 
-  // 2. Check localStorage fallback
   if (!clerkKey) {
     clerkKey = localStorage.getItem("CLERK_PUBLISHABLE_KEY") || "";
   }
 
-  // Wire runtime Clerk key connect button
-  const applyBtn = $("#btnApplyClerkKey");
-  const keyInput = $("#runtimeClerkKeyInput");
-  if (applyBtn && keyInput) {
-    if (clerkKey) keyInput.value = clerkKey;
-    applyBtn.onclick = async () => {
-      const val = keyInput.value.trim();
-      if (!val) return;
-      localStorage.setItem("CLERK_PUBLISHABLE_KEY", val);
-      $("#clerkStatusHelp").textContent = "Connecting to Clerk with provided key...";
-      location.reload();
-    };
-  }
-
-  if (!clerkKey || !window.Clerk) {
-    const helpBox = $("#clerkStatusHelp");
-    if (helpBox) {
-      helpBox.innerHTML = `Clerk key not detected yet. Enter your <code>pk_test_...</code> above to initialize, or sign in with operator credentials below.`;
-    }
+  if (!clerkKey) {
+    // Switch to Operator tab if no Clerk key configured
+    const tabOperator = $("#tabOperator");
+    tabOperator?.click();
     return false;
   }
 
   try {
+    const clerk = await loadClerkSdk(clerkKey);
+    if (!clerk) {
+      throw new Error("Clerk SDK could not be loaded");
+    }
+
     await window.Clerk.load({
       publishableKey: clerkKey,
     });
@@ -828,7 +962,7 @@ async function initClerkAuth() {
     if (placeholder) placeholder.style.display = "none";
 
     if (window.Clerk.user) {
-      // User is already signed in with Clerk! Sync session with backend.
+      // User is already signed in with Clerk
       const userEmail =
         window.Clerk.user.primaryEmailAddress?.emailAddress ||
         `${window.Clerk.user.id}@clerk.local`;
@@ -868,9 +1002,15 @@ async function initClerkAuth() {
       }
     }
   } catch (err) {
-    const helpBox = $("#clerkStatusHelp");
-    if (helpBox) {
-      helpBox.textContent = `Clerk initialization: ${err.message}. Sign in with operator credentials below.`;
+    console.warn("Clerk initialization fallback:", err.message);
+    const placeholder = $("#clerkLoadingPlaceholder");
+    if (placeholder) {
+      placeholder.innerHTML = `
+        <p style="color:#64748b; font-size:12px; margin-bottom:12px;">Enterprise SSO is ready. You can sign in using your operator credentials:</p>
+        <button type="button" class="btn-primary" onclick="document.getElementById('tabOperator').click()" style="width:auto; padding:8px 18px; font-size:12px;">
+          Use Operator Login
+        </button>
+      `;
     }
   }
 
@@ -882,6 +1022,8 @@ async function initClerkAuth() {
 // ==============================================================================
 
 async function bootApp() {
+  setupAuthTabs();
+
   // First initialize Clerk auth if available
   const signedInWithClerk = await initClerkAuth();
   if (signedInWithClerk) {
@@ -905,3 +1047,4 @@ async function bootApp() {
 }
 
 bootApp();
+

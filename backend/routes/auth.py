@@ -33,9 +33,31 @@ def register(email: str = Form(...), password: str = Form(...), db: Session = De
     return response
 
 
+from fastapi import Request
+
 @router.post("/login")
 @router.post("/auth/login")
-def login(email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+async def login(request: Request, db: Session = Depends(get_db)):
+    email = ""
+    password = ""
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            email = str(body.get("email", "")).strip()
+            password = str(body.get("password", "")).strip()
+        except Exception:
+            pass
+    if not email:
+        try:
+            form = await request.form()
+            email = str(form.get("email", "")).strip()
+            password = str(form.get("password", "")).strip()
+        except Exception:
+            pass
+    if not email or not password:
+        raise HTTPException(400, "Email and password are required")
+
     user = db.scalar(select(User).where(User.email == email))
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(401, "Invalid email or password")
