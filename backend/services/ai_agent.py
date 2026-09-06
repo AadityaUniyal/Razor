@@ -442,5 +442,5 @@ async def analyze_intent_resilient(message: str, force_provider: Optional[str] =
     return intent, "fallback-rules", latency_ms
 
 
-# Contract alias from PROJECT.md
+# Stable public alias used by the recovery recommendation service.
 get_intent_with_fallback = analyze_intent_resilient

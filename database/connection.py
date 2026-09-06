@@ -18,6 +18,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
+# Keep local startup responsive when the managed database is temporarily asleep
+# or unreachable. Callers still receive the database error, but the web process
+# does not remain blocked indefinitely while opening a connection.
+if DATABASE_URL.startswith("postgresql") and "connect_timeout=" not in DATABASE_URL:
+    DATABASE_URL = f"{DATABASE_URL}&connect_timeout=5" if "?" in DATABASE_URL else f"{DATABASE_URL}?connect_timeout=5"
+
 is_serverless = bool(os.getenv("VERCEL") or os.getenv("NOW_REGION") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
 
 engine_kwargs = {
@@ -28,9 +34,13 @@ engine_kwargs = {
 
 if is_serverless:
     # Serverless lambdas should keep a lean pool to prevent exhausting Neon connection limits
-    engine_kwargs.update({"pool_size": 3, "max_overflow": 5})
+    engine_kwargs.update({"pool_size": 3, "max_overflow": 5, "pool_timeout": 10})
 else:
-    engine_kwargs.update({"pool_size": 10, "max_overflow": 20})
+    engine_kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_timeout": 30})
+
+# LIFO reuses warm connections first and lets idle overflow connections expire
+# naturally, which is a better fit for Neon and bursty dashboard traffic.
+engine_kwargs["pool_use_lifo"] = True
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 

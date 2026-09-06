@@ -16,8 +16,18 @@ def broadcast(message: dict[str, Any]) -> None:
     dead = []
     for ws in list(app_websockets):
         try:
-            asyncio.run_coroutine_threadsafe(ws.send_json(message), running_loop)
+            future = asyncio.run_coroutine_threadsafe(ws.send_json(message), running_loop)
+            future.add_done_callback(_discard_failed_socket(ws))
         except Exception:
             dead.append(ws)
     for ws in dead:
         app_websockets.discard(ws)
+
+
+def _discard_failed_socket(ws):
+    def done(future):
+        try:
+            future.result()
+        except Exception:
+            app_websockets.discard(ws)
+    return done

@@ -1,5 +1,6 @@
 from typing import Any, Optional
 from fastapi import APIRouter, Depends
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.core.config import GROQ_API_KEY, GROQ_MODEL, GEMINI_API_KEY, GEMINI_MODEL
@@ -11,12 +12,12 @@ from backend.services.ai_agent import (
     CustomerIntent
 )
 from database.connection import get_db
-from database.models import User
+from database.models import DecisionLedger, User
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
-async def _handle_ai_classification(payload: dict[str, Any]) -> dict[str, Any]:
+async def _handle_ai_classification(payload: dict[str, Any], db: Session) -> dict[str, Any]:
     message = payload.get("message", "")
     provider_req = payload.get("provider")
     force_fallback = payload.get("force_fallback", False)
@@ -62,6 +63,12 @@ async def _handle_ai_classification(payload: dict[str, Any]) -> dict[str, Any]:
         "temperature": 0.0,
     }
 
+    total_decisions = db.scalar(select(func.count(DecisionLedger.id))) or 0
+    approved_decisions = db.scalar(
+        select(func.count(DecisionLedger.id)).where(DecisionLedger.policy_result == "APPROVED")
+    ) or 0
+    policy_acceptance_rate = round((approved_decisions / total_decisions) * 100, 1) if total_decisions else 0.0
+
     return {
         "message": message,
         "provider_used": provider_used,
@@ -79,21 +86,21 @@ async def _handle_ai_classification(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/classify")
-async def ai_classify(payload: dict[str, Any], user: User = Depends(get_current_user)):
+async def ai_classify(payload: dict[str, Any], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Primary classification endpoint with provider override support."""
-    return await _handle_ai_classification(payload)
+    return await _handle_ai_classification(payload, db)
 
 
 @router.post("/sandbox")
-async def ai_sandbox(payload: dict[str, Any], user: User = Depends(get_current_user)):
+async def ai_sandbox(payload: dict[str, Any], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Interactive sandbox endpoint for testing provider fallback and prompt inspection."""
-    return await _handle_ai_classification(payload)
+    return await _handle_ai_classification(payload, db)
 
 
 @router.post("/test-intent")
-async def test_ai_intent(payload: dict[str, Any], user: User = Depends(get_current_user)):
+async def test_ai_intent(payload: dict[str, Any], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Interactive sandbox for testing customer text in English, Hindi, and Hinglish (legacy support)."""
-    return await _handle_ai_classification(payload)
+    return await _handle_ai_classification(payload, db)
 
 
 
@@ -136,13 +143,18 @@ def ai_evaluation_metrics(db: Session = Depends(get_db), user: User = Depends(ge
         and item["predicted_intent"] == "PROMISE_TO_PAY"
     )
     expected_promises = sum(1 for item in eval_list if item["expected_intent"] == "PROMISE_TO_PAY")
+    total_decisions = db.scalar(select(func.count(DecisionLedger.id))) or 0
+    approved_decisions = db.scalar(
+        select(func.count(DecisionLedger.id)).where(DecisionLedger.policy_result == "APPROVED")
+    ) or 0
+    policy_acceptance_rate = round((approved_decisions / total_decisions) * 100, 1) if total_decisions else 0.0
 
     return {
         "accuracy_percent": accuracy,
         "total_benchmarks": len(test_cases),
         "correct_predictions": correct,
         "promise_detection_rate": round((promise_detected / expected_promises) * 100, 1) if expected_promises else 0.0,
-        "policy_acceptance_rate": 91.5,
+        "policy_acceptance_rate": policy_acceptance_rate,
         "ai_model": GROQ_MODEL if GROQ_API_KEY else "Deterministic Multi-lingual Fallback",
         "benchmark_runs": eval_list,
     }

@@ -10,6 +10,17 @@
       "use": "@vercel/static"
     }
   ],
+  "headers": [
+    {
+      "source": "/static/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
+  ],
   "routes": [
     {
       "src": "/static/(.*)",
@@ -20,8 +31,8 @@
       "dest": "api/index.py"
     },
     {
-      "src": "/(.*)",
-      "dest": "api/index.py"
+      "src": "/",
+      "dest": "/frontend/index.html"
     }
   ],
   "crons": [

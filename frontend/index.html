@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RazorRescue – Revenue Recovery Platform</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <title>RazorRescue | Revenue Recovery Console</title>
+  <link rel="stylesheet" href="/static/styles.css?v=4">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <!-- Clerk Frontend SDK -->
   
 </head>
@@ -13,9 +14,9 @@
   <!-- AUTHENTICATION VIEW -->
   <section class="auth-container" id="authPanel">
     <div class="auth-hero">
-      <div class="logo-badge">⚡ RAZORRESCUE</div>
-      <h1>RazorRescue – Revenue Recovery Platform</h1>
-      <p>Automated payment failure recovery, smart customer promise tracking, and instant revenue analytics for modern merchants.</p>
+      <div class="logo-badge">RAZORRESCUE</div>
+      <h1>Revenue recovery, made operational</h1>
+      <p>A branded operations console for payment recovery, promise tracking, and live revenue analytics.</p>
       
       <div class="auth-features">
         <div class="auth-feature-item">
@@ -43,25 +44,25 @@
             </svg>
           </div>
           <h2>RazorRescue</h2>
-          <p class="auth-sub" id="authSubheading">Sign in to your account</p>
+          <p class="auth-sub" id="authSubheading">Sign in to continue</p>
         </div>
 
         <!-- AUTH TABS: SIGN IN / CREATE ACCOUNT -->
         <div class="auth-tabs" id="authTabs">
-          <button type="button" class="auth-tab active" id="tabSignIn" data-mode="signin">Sign In</button>
-          <button type="button" class="auth-tab" id="tabSignUp" data-mode="signup">Create Account</button>
+          <a href="/?mode=signin" class="auth-tab active" id="tabSignIn" data-mode="signin">Sign In</a>
+          <a href="/?mode=signup" class="auth-tab" id="tabSignUp" data-mode="signup">Create Account</a>
         </div>
 
         <!-- ERROR / NOTIFICATION ALERT -->
         <div id="authAlert" class="auth-error-alert hidden"></div>
 
         <!-- SIGN IN FORM -->
-        <form id="signInForm" autocomplete="on">
+        <form id="signInForm" action="/api/auth/login" method="post" autocomplete="on">
           <div class="form-group">
             <label for="loginEmail">Email Address</label>
             <div class="input-icon-wrap">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L1 7"/></svg>
-              <input id="loginEmail" name="email" type="email" class="form-control with-icon" value="admin@razorrescue.local" placeholder="you@example.com" required autocomplete="username">
+              <input id="loginEmail" name="email" type="email" class="form-control with-icon" placeholder="you@example.com" required autocomplete="username">
             </div>
           </div>
 
@@ -69,7 +70,7 @@
             <label for="loginPassword">Password</label>
             <div class="input-icon-wrap">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              <input id="loginPassword" name="password" type="password" class="form-control with-icon" value="password123" placeholder="••••••••" required autocomplete="current-password">
+              <input id="loginPassword" name="password" type="password" class="form-control with-icon" placeholder="••••••••" required autocomplete="current-password">
               <button type="button" class="btn-toggle-pwd" id="btnToggleLoginPwd" title="Show/hide password">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
@@ -87,13 +88,11 @@
             <span id="signInBtnText">Sign In to Dashboard</span>
           </button>
 
-          <button type="button" id="btnQuickDemoLogin" class="btn-quick-demo">
-            ⚡ Quick Demo Login (admin@razorrescue.local)
-          </button>
+          <p class="auth-helper-text">Use the operator credentials provisioned for this environment.</p>
         </form>
 
         <!-- CREATE ACCOUNT FORM -->
-        <form id="signUpForm" class="hidden" autocomplete="on">
+        <form id="signUpForm" action="/api/auth/register" method="post" class="hidden" autocomplete="on">
           <div class="form-group">
             <label for="regEmail">Email Address</label>
             <div class="input-icon-wrap">
@@ -128,10 +127,11 @@
     <aside class="sidebar">
       <div class="brand-header">
         <div class="brand-title">RAZOR<span>RESCUE</span></div>
-        <div class="brand-desc">AI Revenue Recovery Orchestrator</div>
+        <div class="brand-desc">Revenue Recovery Console</div>
       </div>
 
       <nav class="side-nav" id="nav">
+        <div class="nav-section-label">Workspace</div>
         <button data-view="overview" class="active">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
           Overview
@@ -140,6 +140,15 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="8" y="2" rx="1"/></svg>
           Recovery Queue
         </button>
+        <button data-view="approvals">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Approval Queue
+        </button>
+        <button data-view="customers">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Customers
+        </button>
+        <div class="nav-section-label">Intelligence</div>
         <button data-view="promises">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           Promises to Pay
@@ -152,6 +161,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
           Decision Ledger
         </button>
+        <div class="nav-section-label">Control Plane</div>
         <button data-view="analytics">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
           Analytics & ROI
@@ -173,19 +183,33 @@
     <!-- CONTENT AREA -->
     <main class="main-content">
       <header class="top-header">
+        <button class="mobile-nav-toggle" id="mobileNavToggle" type="button" aria-label="Open navigation" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
+        </button>
         <div class="header-left">
           <p class="breadcrumb" id="crumb">OPERATIONS / OVERVIEW</p>
           <h2 id="pageTitle">Operations Overview</h2>
         </div>
 
         <div class="header-right">
+          <button class="icon-button" id="refreshViewBtn" type="button" title="Refresh current view" aria-label="Refresh current view">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"/></svg>
+          </button>
+          <button class="icon-button notification-trigger" id="notificationBtn" type="button" title="Open notifications" aria-label="Open notifications" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>
+            <span class="notification-count hidden" id="notificationCount">0</span>
+          </button>
+          <div class="notification-popover hidden" id="notificationPopover">
+            <div class="popover-heading"><div><b>Notifications</b><span>Latest operational activity</span></div><button class="popover-close" type="button" data-close-popover>×</button></div>
+            <div id="notificationList" class="notification-list"></div>
+          </div>
           <span class="status-badge healthy" id="systemHealthBadge">
             <span class="pulse-dot"></span>
             ALL SYSTEMS OPERATIONAL
           </span>
 
           <span id="userEmail" style="font-size:13px; font-weight:600; color:var(--text-muted);"></span>
-          <button id="logoutBtn" class="btn-secondary">Sign Out</button>
+          <a href="/api/auth/logout" id="logoutBtn" class="btn-secondary">Sign Out</a>
         </div>
       </header>
 
@@ -196,6 +220,7 @@
       <div id="toastContainer" class="toast-container"></div>
     </main>
   </div>
+  <div class="mobile-nav-backdrop hidden" id="mobileNavBackdrop"></div>
 
   <!-- ========================================================================
        TEMPLATES
@@ -205,6 +230,25 @@
   <template id="overviewTemplate">
     <section class="metric-grid" id="stats"></section>
 
+    <section class="overview-command-grid">
+      <article class="command-card command-card-primary">
+        <div class="command-card-top"><span class="eyebrow">TODAY'S CONTROL ROOM</span><span class="live-chip"><span class="pulse-dot"></span> Live</span></div>
+        <h3 id="overviewHeadline">Recovery operations are in motion.</h3>
+        <p id="overviewSubline">Monitor risk, respond to exceptions, and protect customer trust from one workspace.</p>
+        <div class="command-actions"><button class="btn-primary btn-compact" data-view="queue">Review queue</button><button class="btn-ghost-light btn-compact" data-view="customers">Open customers</button></div>
+      </article>
+      <article class="signal-card">
+        <div class="signal-card-heading"><div><span class="eyebrow">QUEUE PULSE</span><h4>Where attention goes next</h4></div><span class="signal-orb"></span></div>
+        <div class="signal-list" id="overviewSignals"></div>
+      </article>
+      <article class="quick-actions-card">
+        <span class="eyebrow">SHORTCUTS</span><h4>Move with intent</h4>
+        <button class="quick-action" data-view="ai"><span class="quick-action-icon blue">✦</span><span><b>Test a message</b><small>Run AI classification</small></span><span>→</span></button>
+        <button class="quick-action" data-view="promises"><span class="quick-action-icon amber">◷</span><span><b>Review promises</b><small>Check upcoming commitments</small></span><span>→</span></button>
+        <button class="quick-action" data-view="analytics"><span class="quick-action-icon green">↗</span><span><b>See net recovery</b><small>Understand ROI impact</small></span><span>→</span></button>
+      </article>
+    </section>
+
     <div style="display:grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; margin-bottom: 24px;">
       <article class="panel">
         <div class="panel-header">
@@ -212,7 +256,7 @@
           <span class="badge wait">Live Funnel</span>
         </div>
         <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">Track how revenue flows through event detection, policy validation, and final recovery.</p>
-        <div id="funnel" class="funnel-container"></div>
+        <div id="funnel" class="funnel-container" aria-label="Recovery funnel"></div>
       </article>
 
       <article class="panel">
@@ -235,6 +279,7 @@
 
   <!-- RECOVERY QUEUE TEMPLATE -->
   <template id="queueTemplate">
+    <section class="metric-grid compact-metrics" id="queueStats"></section>
     <section class="panel">
       <div class="panel-header">
         <div>
@@ -243,6 +288,7 @@
         </div>
         <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
           <input type="text" id="queueSearchInput" class="form-control" placeholder="Search customer or case ID..." style="width:220px; padding:6px 12px; font-size:12px;">
+          <button class="btn-secondary btn-compact" id="clearQueueFilters" type="button">Clear filters</button>
           <div class="filter-pills" id="queueFilterPills">
             <button class="filter-pill active" data-filter="ALL">All</button>
             <button class="filter-pill" data-filter="WAIT">Wait / Grace</button>
@@ -277,7 +323,7 @@
     </section>
 
     <!-- CASE DETAIL & DECISION EXPLAINER MODAL / DRAWER -->
-    <div id="caseDetailDrawer" class="hidden">
+    <div id="caseDetailDrawer" class="hidden" role="dialog" aria-modal="true" aria-labelledby="detailHeaderTitle">
       <section class="panel" style="border-top: 4px solid var(--brand-blue);">
         <div class="panel-header">
           <div>
@@ -340,24 +386,37 @@
             <!-- Case Timeline -->
             <div class="panel">
               <h4 style="font-size: 13px; margin-bottom: 8px;">Case Event Timeline</h4>
-              <div id="detailTimeline"></div>
+              <div id="detailTimeline" class="lifecycle-timeline"></div>
             </div>
           </div>
         </div>
       </section>
     </div>
+  </template>
 
-
+  <!-- APPROVAL QUEUE TEMPLATE -->
+  <template id="approvalsTemplate">
+    <section class="ai-command-strip approval-hero">
+      <div><span class="eyebrow">HUMAN CONTROL PLANE</span><h3>Review the next best action before it reaches a customer.</h3><p>AI supplies context and alternatives. Policy and operator approval remain the final gate.</p></div>
+      <div class="ai-command-stat"><span>Safety contract</span><strong>Approve first</strong><small>No outbound action is sent here</small></div>
+    </section>
+    <section class="metric-grid compact-metrics" id="approvalStats"></section>
+    <section class="panel">
+      <div class="panel-header"><div><h3>Pending recommendations</h3><p class="section-subtitle">Compare expected value, customer disturbance, risk flags, and policy reasons.</p></div><div class="directory-tools"><select id="approvalFilterSelect" class="select-control"><option value="PENDING_APPROVAL">Pending approval</option><option value="all">All decisions</option><option value="APPROVED">Approved</option><option value="REJECTED">Rejected</option><option value="DEFERRED">Deferred</option></select><span class="badge" id="approvalCountBadge">0 requests</span></div></div>
+      <div id="approvalList" class="approval-list"></div>
+    </section>
+  </template>
 
   <!-- PROMISES TO PAY TEMPLATE -->
   <template id="promisesTemplate">
+    <section class="metric-grid compact-metrics" id="promiseStats"></section>
     <section class="panel">
       <div class="panel-header">
         <div>
           <h3>Tracked Customer Promises to Pay</h3>
           <p style="font-size:12px; color:var(--text-muted);">Extracted automatically from customer natural language via Groq AI & resolved to UTC verification windows.</p>
         </div>
-        <span class="badge" id="promiseCountBadge">0 Promises</span>
+        <div class="directory-tools"><input class="inline-search" id="promiseSearchInput" type="search" placeholder="Search promises..."><select id="promiseFilterSelect" class="select-control"><option value="all">All statuses</option><option value="PENDING">Pending</option><option value="FOLLOW_UP_SENT">Follow-up sent</option><option value="FULFILLED">Fulfilled</option></select><span class="badge" id="promiseCountBadge">0 Promises</span></div>
       </div>
 
       <div class="table-wrap">
@@ -380,8 +439,26 @@
     </section>
   </template>
 
+  <!-- CUSTOMER DIRECTORY TEMPLATE -->
+  <template id="customersTemplate">
+    <section class="customer-hero">
+      <div><span class="eyebrow">RELATIONSHIP INTELLIGENCE</span><h3>Customers, not just cases.</h3><p>See payment exposure, recovery history, language preference, and communication consent in one place.</p></div>
+      <div class="customer-hero-stat"><span>Total profiles</span><strong id="customerTotal">0</strong><small>Synced from recovery activity</small></div>
+    </section>
+    <section class="metric-grid compact-metrics" id="customerStats"></section>
+    <section class="panel">
+      <div class="panel-header"><div><h3>Customer directory</h3><p class="section-subtitle">Search by name, email, or external customer ID.</p></div><div class="directory-tools"><div class="search-field"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="customerSearchInput" type="search" placeholder="Search customers..."></div><select id="customerFilterSelect" class="select-control"><option value="all">All customers</option><option value="risk">At risk</option><option value="recovered">Recovered</option><option value="optout">Opted out</option></select></div></div>
+      <div class="table-wrap"><table class="data-table customer-table"><thead><tr><th>Customer</th><th>Relationship</th><th>At risk</th><th>Recovered</th><th>Language</th><th>Consent</th><th>Last activity</th><th></th></tr></thead><tbody id="customersTableBody"></tbody></table></div>
+    </section>
+  </template>
+
   <!-- AI SANDBOX & BENCHMARKS TEMPLATE -->
   <template id="aiTemplate">
+    <section class="ai-command-strip">
+      <div><span class="eyebrow">AI OPERATIONS</span><h3>Read the message before you move money.</h3><p>Language intelligence proposes context. Your deterministic recovery policy stays in control.</p></div>
+      <div class="ai-command-stat"><span>Provider chain</span><strong>3 layers</strong><small>Groq → Gemini → Rules</small></div>
+      <div class="ai-command-stat"><span>Safety posture</span><strong class="safe-text">Policy gated</strong><small>AI cannot dispatch action</small></div>
+    </section>
     <div class="sandbox-grid">
       <!-- Left: Interactive Sandbox -->
       <section class="panel">
@@ -464,13 +541,14 @@
 
   <!-- DECISION LEDGER TEMPLATE -->
   <template id="auditTemplate">
+    <section class="metric-grid compact-metrics" id="auditStats"></section>
     <section class="panel">
       <div class="panel-header">
         <div>
           <h3>Immutable Decision Ledger</h3>
           <p style="font-size:12px; color:var(--text-muted);">Auditable trace answering "Why did the system take this action?" with deterministic factors, strategy scores, and policy results.</p>
         </div>
-        <span class="badge">Append-Only Audit</span>
+        <div class="directory-tools"><input class="inline-search" id="auditSearchInput" type="search" placeholder="Search case or reason..."><select id="auditResultSelect" class="select-control"><option value="all">All results</option><option value="APPROVED">Approved</option><option value="BLOCKED">Blocked</option></select><span class="badge">Append-Only Audit</span></div>
       </div>
 
       <div class="table-wrap">
@@ -495,7 +573,7 @@
   <template id="analyticsTemplate">
     <section class="metric-grid" id="analyticsStatsGrid"></section>
 
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px;">
+    <div class="analytics-top-grid">
       <article class="panel">
         <div class="panel-header">
           <h3>Revenue at Risk vs Recovered by Category</h3>
@@ -512,6 +590,11 @@
         <div id="analyticsRoiSummary" style="font-size:13px; line-height:1.8;"></div>
       </article>
     </div>
+    <div class="analytics-bottom-grid">
+      <section class="panel chart-panel"><div class="panel-header"><div><h3>Recovery momentum</h3><p class="section-subtitle">Recovered value and open exposure over the last 14 days.</p></div><span class="badge recovered">14 day view</span></div><div class="chart-legend"><span><i class="legend-dot recovered-dot"></i>Recovered</span><span><i class="legend-dot risk-dot"></i>At risk</span></div><div id="analyticsTrendChart" class="trend-chart"></div></section>
+      <section class="panel"><div class="panel-header"><div><h3>Recovery lift</h3><p class="section-subtitle">Treatment performance compared with the holdout group.</p></div><span class="badge" id="liftStatusBadge">Awaiting data</span></div><div id="analyticsLiftPanel" class="lift-panel"></div></section>
+    </div>
+    <section class="panel"><div class="panel-header"><div><h3>Risk surface</h3><p class="section-subtitle">Exposure concentration by failure category. Hover a cell for context.</p></div><span class="badge wait">Operator view</span></div><div id="analyticsRiskHeatmap" class="risk-heatmap" role="img" aria-label="Recovery risk heatmap"></div></section>
   </template>
 
   <!-- SETTINGS & HEALTH TEMPLATE -->
@@ -523,6 +606,11 @@
           <span class="badge wait" id="policyVersionBadge">v1.2</span>
         </div>
         <div id="policyConfigList"></div>
+        <form id="policyForm" class="policy-form">
+          <div class="form-section-heading"><span class="eyebrow">ADMIN CONTROLS</span><span class="muted-caption">Changes create a new policy version</span></div>
+          <div class="policy-fields"><label>Max automated attempts<input id="policyMaxAttempts" type="number" min="0" max="20"></label><label>Max customer communications<input id="policyMaxComms" type="number" min="0" max="20"></label><label>Human escalation threshold<input id="policyEscalation" type="number" min="0" step="100"></label><label>Promise grace hours<input id="policyGraceHours" type="number" min="0" max="168" step="1"></label><label>AI confidence threshold<input id="policyConfidence" type="number" min="0" max="1" step="0.05"></label></div>
+          <button class="btn-primary" type="submit">Save policy version</button>
+        </form>
       </section>
 
       <section class="panel">
@@ -531,11 +619,12 @@
           <span class="badge healthy">Diagnostics</span>
         </div>
         <div id="systemHealthDetails"></div>
+        <div class="health-events" id="healthEvents"></div>
       </section>
     </div>
   </template>
 
   <!-- APP SCRIPT -->
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>

@@ -1,6 +1,5 @@
 import asyncio
 import concurrent.futures
-from secrets import token_hex
 from typing import Any, Optional
 from fastapi import HTTPException
 from sqlalchemy import select, desc
@@ -14,7 +13,7 @@ from backend.services.strategy_scorer import calculate_strategy_scores
 from backend.services.websocket_manager import broadcast
 from database.models import (
     RecoveryCase, RecoveryPolicy, ActionRecord, DecisionLedger,
-    PaymentPromise, ScheduledTask, Notification, CaseEvent,
+    PaymentPromise, ScheduledTask, Notification, CaseEvent, RecoveryOutcome, SuppressionRule,
     CaseState, AIEvaluationRecord, now_utc
 )
 
@@ -41,8 +40,11 @@ def _execute_coro_sync(coro, timeout: float = 15.0):
 
 
 
-def latest_policy(db: Session) -> RecoveryPolicy:
-    policy = db.scalar(select(RecoveryPolicy).where(RecoveryPolicy.active.is_(True)).order_by(desc(RecoveryPolicy.id)))
+def latest_policy(db: Session, merchant_id: Optional[int] = None) -> RecoveryPolicy:
+    query = select(RecoveryPolicy).where(RecoveryPolicy.active.is_(True)).order_by(desc(RecoveryPolicy.id))
+    if merchant_id:
+        query = query.where((RecoveryPolicy.merchant_id == merchant_id) | RecoveryPolicy.merchant_id.is_(None))
+    policy = db.scalar(query)
     if not policy:
         raise HTTPException(500, "No active policy found")
     return policy
@@ -84,7 +86,7 @@ def record_action(
     key: Optional[str] = None
 ) -> bool:
     """Action-level idempotency protection."""
-    key = key or f"{case.case_id}:{action_type}:{token_hex(8)}"
+    key = key or f"{case.case_id}:{action_type}:{case.state}:{case.retry_count}:{case.communication_count}"
     if db.scalar(select(ActionRecord).where(ActionRecord.idempotency_key == key)):
         return False
 
@@ -141,16 +143,35 @@ def create_or_update_promise(db: Session, case: RecoveryCase, message: str, prom
             status="PENDING",
         ))
 
-    db.add(ScheduledTask(
-        case_id=case.case_id,
-        task_type="VERIFY_PROMISE",
-        scheduled_at=promised_at,
-        idempotency_key=f"promise-verify:{case.case_id}:{int(promised_at.timestamp())}",
-    ))
+    task_key = f"promise-verify:{case.case_id}:{int(promised_at.timestamp())}"
+    existing_task = db.scalar(select(ScheduledTask).where(ScheduledTask.idempotency_key == task_key))
+    pending_tasks = db.scalars(select(ScheduledTask).where(
+        ScheduledTask.case_id == case.case_id,
+        ScheduledTask.task_type == "VERIFY_PROMISE",
+        ScheduledTask.status == "PENDING",
+    )).all()
+    for task in pending_tasks:
+        if task.idempotency_key != task_key:
+            task.status = "CANCELLED"
+
+    if existing_task:
+        existing_task.case_id = case.case_id
+        existing_task.task_type = "VERIFY_PROMISE"
+        existing_task.scheduled_at = promised_at
+        existing_task.status = "PENDING"
+        existing_task.attempt_count = 0
+        existing_task.completed_at = None
+    else:
+        db.add(ScheduledTask(
+            case_id=case.case_id,
+            task_type="VERIFY_PROMISE",
+            scheduled_at=promised_at,
+            idempotency_key=task_key,
+        ))
 
 
 def process_case(db: Session, case: RecoveryCase, event_type: str, message: str = "", force_provider: Optional[str] = None) -> dict[str, Any]:
-    policy_row = latest_policy(db)
+    policy_row = latest_policy(db, case.merchant_id)
     policy = policy_row.configuration
     available_actions = ["WAIT", "VERIFY", "RECOVER", "ESCALATE", "STOP"]
 
@@ -182,8 +203,6 @@ def process_case(db: Session, case: RecoveryCase, event_type: str, message: str 
     # Rule: Terminal state check
     if case.recovered or "CAPTURED" in normalized_event or "SUCCESS" in normalized_event or "PAID" in normalized_event:
         mark_recovered(db, case, event_type)
-        db.commit()
-        db.refresh(case)  # Ensure case state is up‑to‑date for subsequent actions
         selected = "STOP"
         reason = "Payment captured successfully; recovery complete."
     elif customer_opted_out or "OPT_OUT" in normalized_event:
@@ -228,6 +247,19 @@ def process_case(db: Session, case: RecoveryCase, event_type: str, message: str 
             reason = "Customer opt-out detected via language analysis."
             if case.customer:
                 case.customer.communication_opt_out = True
+                existing_suppression = db.scalar(select(SuppressionRule).where(
+                    SuppressionRule.customer_id_ref == case.customer.id,
+                    SuppressionRule.rule_type == "OPT_OUT",
+                    SuppressionRule.active.is_(True),
+                ))
+                if not existing_suppression:
+                    db.add(SuppressionRule(
+                        merchant_id=case.merchant_id,
+                        customer_id_ref=case.customer.id,
+                        case_id_ref=case.id,
+                        rule_type="OPT_OUT",
+                        reason="Customer requested no further recovery communication.",
+                    ))
         elif intent == "PAYMENT_COMPLETED_CLAIM":
             # Crucial Rule: Customer claim NEVER directly marks recovered without external gateway verification
             selected = "VERIFY"
@@ -257,7 +289,9 @@ def process_case(db: Session, case: RecoveryCase, event_type: str, message: str 
         selected = "STOP"
         policy_result = "APPROVED"
         reason = "Case is recovered; all actions stopped."
-    elif case.retry_count >= max_attempts and selected in {"WAIT", "VERIFY", "RECOVER"}:
+    # Waiting on a customer promise is passive and must not consume the
+    # automated recovery-attempt budget. The cap applies to active actions.
+    elif case.retry_count >= max_attempts and selected in {"VERIFY", "RECOVER"}:
         policy_result = "BLOCKED"
         selected = "ESCALATE" if case.amount >= escalate_threshold else "STOP"
         reason = "Maximum automated recovery retry limit reached."
@@ -327,6 +361,16 @@ def process_case(db: Session, case: RecoveryCase, event_type: str, message: str 
         llm_provider=llm_provider,
     )
     db.add(decision)
+    if case.recovered and not db.scalar(select(RecoveryOutcome).where(RecoveryOutcome.case_id_ref == case.id)):
+        db.add(RecoveryOutcome(
+            merchant_id=case.merchant_id,
+            case_id_ref=case.id,
+            payment_outcome="RECOVERED",
+            recovered_amount=case.recovered_amount,
+            intervention_cost=case.total_intervention_cost,
+            executed_action=selected,
+            extra_data={"source": event_type},
+        ))
     db.commit()
     db.refresh(case)
 

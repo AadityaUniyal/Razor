@@ -1,24 +1,58 @@
 import json
 from hashlib import sha256
 from hmac import compare_digest, new as hmac_new
-from typing import Any
+from typing import Any, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.core.config import RAZORPAY_WEBHOOK_SECRET
+from backend.core.config import RAZORPAY_WEBHOOK_SECRET, INGEST_API_KEY
+from backend.core.security import get_current_user
+from backend.core.tenancy import default_merchant
 from backend.services.policy_engine import to_case_dict, process_case
 from backend.services.websocket_manager import broadcast
 from database.connection import get_db
-from database.models import Customer, PaymentEvent, RecoveryCase, CaseEvent, SystemHealthEvent, now_utc
+from database.models import Customer, PaymentEvent, RecoveryCase, CaseEvent, SystemHealthEvent, SubscriptionContext, InvoiceContext, User, now_utc
 
 router = APIRouter(prefix="/api", tags=["webhooks"])
 
 
+def verify_ingest_auth(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """
+    Authenticate event ingestion requests via either:
+    1. X-API-Key header matching INGEST_API_KEY (or API_KEY)
+    2. Valid authenticated user session (Bearer token or session cookie)
+
+    Unauthenticated or invalid requests MUST return HTTP 401.
+    """
+    api_key = request.headers.get("X-API-Key", "").strip()
+    configured_key = os.getenv("INGEST_API_KEY", os.getenv("API_KEY", INGEST_API_KEY)).strip()
+
+    if api_key:
+        if configured_key and compare_digest(api_key, configured_key):
+            return None  # Authenticated via valid API Key
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    try:
+        return get_current_user(request, db)
+    except HTTPException:
+        raise HTTPException(
+            status_code=401,
+            detail="API key or session authentication required",
+        )
+
+
 @router.post("/events/ingest")
 @router.post("/demo/webhook")  # Backwards-compatible alias for existing test suites
-def ingest_recovery_event(payload: dict[str, Any], db: Session = Depends(get_db)):
+def ingest_recovery_event(
+    payload: dict[str, Any],
+    db: Session = Depends(get_db),
+    auth: Any = Depends(verify_ingest_auth),
+):
     """
     Standard event ingestion endpoint with strict event-level idempotency
     and terminal state protection.
@@ -26,6 +60,8 @@ def ingest_recovery_event(payload: dict[str, Any], db: Session = Depends(get_db)
     external_event_id = payload.get("external_event_id")
     if not external_event_id:
         raise HTTPException(400, "external_event_id is required")
+
+    merchant_id = getattr(auth, "merchant_id", None) or default_merchant(db).id
 
     # 1. Event-level Idempotency Check
     existing_event = db.scalar(select(PaymentEvent).where(PaymentEvent.external_event_id == external_event_id))
@@ -58,6 +94,7 @@ def ingest_recovery_event(payload: dict[str, Any], db: Session = Depends(get_db)
         )
         if not customer:
             customer = Customer(
+                merchant_id=merchant_id,
                 external_customer_id=str(customer_key),
                 name=payload.get("customer_name", "Unknown customer"),
                 email=customer_email,
@@ -66,6 +103,7 @@ def ingest_recovery_event(payload: dict[str, Any], db: Session = Depends(get_db)
             db.add(customer)
             db.flush()
         case = RecoveryCase(
+            merchant_id=merchant_id,
             case_id=case_ref,
             customer_id_ref=customer.id,
             customer_name=customer.name,
@@ -76,14 +114,40 @@ def ingest_recovery_event(payload: dict[str, Any], db: Session = Depends(get_db)
             external_subscription_id=payload.get("external_subscription_id"),
         )
         db.add(case)
-        db.commit()
-        db.refresh(case)
+        db.flush()
+
+        subscription_payload = payload.get("subscription") or {}
+        if payload.get("external_subscription_id") or subscription_payload:
+            case.subscription = SubscriptionContext(
+                external_subscription_id=payload.get("external_subscription_id") or subscription_payload.get("id"),
+                plan_id=subscription_payload.get("plan_id"),
+                plan_name=subscription_payload.get("plan_name"),
+                billing_period=subscription_payload.get("billing_period"),
+                billing_cycle=subscription_payload.get("billing_cycle"),
+                payment_method=subscription_payload.get("payment_method"),
+                subscription_status=subscription_payload.get("status"),
+                customer_lifetime_value=int(payload.get("customer_lifetime_value") or 0),
+                churn_risk=float(payload.get("churn_risk") or 0),
+                extra_data=subscription_payload,
+            )
+        invoice_payload = payload.get("invoice") or {}
+        if invoice_payload or payload.get("external_invoice_id"):
+            case.invoice = InvoiceContext(
+                external_invoice_id=payload.get("external_invoice_id") or invoice_payload.get("id"),
+                invoice_number=invoice_payload.get("number"),
+                amount_due=int(invoice_payload.get("amount_due") or amount),
+                amount_paid=int(invoice_payload.get("amount_paid") or 0),
+                currency=invoice_payload.get("currency") or "INR",
+                status=invoice_payload.get("status") or "OPEN",
+                extra_data=invoice_payload,
+            )
 
     event_type = payload.get("event_type", "payment.failed")
     normalized = event_type.upper()
 
     # Store raw event
     db.add(PaymentEvent(
+        merchant_id=merchant_id,
         external_event_id=external_event_id,
         event_type=event_type,
         case_reference=case_ref,
@@ -110,7 +174,6 @@ def ingest_recovery_event(payload: dict[str, Any], db: Session = Depends(get_db)
         return {"ok": True, "late_event_ignored": True, "case": to_case_dict(case)}
 
     db.add(CaseEvent(case=case, event_type=event_type, message=payload.get("message", f"Received {event_type}"), details=payload))
-    db.commit()
 
     result = process_case(db, case, event_type, payload.get("message", ""))
     return {"ok": True, "case": to_case_dict(case), "result": result}
@@ -150,12 +213,9 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     if raw_amount is None:
         raise HTTPException(400, "Webhook amount is required")
     amount_inr = int(raw_amount)
-    if "amount" in payment_entity or "plan_amount" in sub_entity or amount_inr >= 100:
-        # Standard Razorpay webhooks send amount in paise (100 paise = 1 INR)
-        if "amount" in payment_entity or "plan_amount" in sub_entity:
-            amount_inr = amount_inr // 100
-        elif amount_inr > 50000: # heuristic for legacy payloads
-            amount_inr = amount_inr // 100
+    # Razorpay entities use paise; generic internal payloads declare units.
+    if "amount" in payment_entity or "plan_amount" in sub_entity or str(payload.get("currency_unit", "inr")).lower() in {"paise", "minor"}:
+        amount_inr //= 100
 
     notes = payment_entity.get("notes", {}) or sub_entity.get("notes", {})
     customer_email = payment_entity.get("email") or sub_entity.get("customer_email") or "unknown@example.invalid"
@@ -175,7 +235,7 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
         "external_payment_id": payment_entity.get("id"),
         "external_subscription_id": sub_entity.get("id"),
     }
-    return ingest_recovery_event(normalized, db)
+    return ingest_recovery_event(normalized, db, auth="razorpay_signature_verified")
 
 
 # Backwards-compatible alias for existing test suites & callers

@@ -1,10 +1,11 @@
 from secrets import token_hex
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
 from backend.core.security import get_current_user
+from backend.core.tenancy import merchant_id_for_user, tenant_filter
 from backend.services.policy_engine import (
     to_case_dict, record_action, mark_recovered, process_case
 )
@@ -16,14 +17,20 @@ router = APIRouter(prefix="/api", tags=["cases"])
 
 
 @router.get("/cases")
-def list_cases(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    cases = db.scalars(select(RecoveryCase).order_by(desc(RecoveryCase.id))).all()
+def list_cases(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    merchant_id = merchant_id_for_user(db, user)
+    cases = db.scalars(select(RecoveryCase).where(tenant_filter(RecoveryCase, merchant_id)).order_by(desc(RecoveryCase.id)).offset(offset).limit(limit)).all()
     return [to_case_dict(c) for c in cases]
 
 
 @router.get("/cases/{case_id}")
 def case_detail(case_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    case = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id))
+    case = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id, tenant_filter(RecoveryCase, merchant_id_for_user(db, user))))
     if not case:
         raise HTTPException(404, "Recovery case not found")
 
@@ -69,7 +76,7 @@ def case_detail(case_id: str, db: Session = Depends(get_db), user: User = Depend
 
 @router.get("/cases/{case_id}/timeline")
 def case_timeline(case_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    case = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id))
+    case = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id, tenant_filter(RecoveryCase, merchant_id_for_user(db, user))))
     if not case:
         raise HTTPException(404, "Case not found")
     return [{
@@ -84,7 +91,7 @@ def case_timeline(case_id: str, db: Session = Depends(get_db), user: User = Depe
 def manual_action(case_id: str, payload: dict[str, Any], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if user.role not in {Role.ADMIN.value, Role.OPERATOR.value}:
         raise HTTPException(403, "Operator role required")
-    case = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id))
+    case = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id, tenant_filter(RecoveryCase, merchant_id_for_user(db, user))))
     if not case:
         raise HTTPException(404, "Case not found")
 
@@ -94,6 +101,8 @@ def manual_action(case_id: str, payload: dict[str, Any], db: Session = Depends(g
 
     if case.recovered and action != "STOP":
         raise HTTPException(409, "Recovered cases cannot receive further recovery actions")
+    if case.state == "STOP" and action != "STOP":
+        raise HTTPException(409, "Stopped cases cannot receive further recovery actions")
 
     if action == "CAPTURE_PAYMENT":
         mark_recovered(db, case, "MANUAL_OPERATOR_CAPTURE")
@@ -117,5 +126,3 @@ def manual_action(case_id: str, payload: dict[str, Any], db: Session = Depends(g
     db.commit()
     broadcast({"type": "CASE_UPDATED", "case_id": case.case_id, "new_state": case.state, "timestamp": now_utc().isoformat()})
     return {"ok": True, "case": to_case_dict(case)}
-
-
