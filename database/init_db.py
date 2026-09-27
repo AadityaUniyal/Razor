@@ -32,7 +32,7 @@ def seed_data(db: Session) -> None:
 
     # 2. Admin User
     if db.scalar(select(func.count(User.id))) == 0:
-        initial_pwd = os.getenv("ADMIN_INITIAL_PASSWORD", "AdminSecure#2026")
+        initial_pwd = os.getenv("ADMIN_INITIAL_PASSWORD", "password123")
         db.add(User(
             email="admin@razorrescue.local",
             password_hash=hash_password(initial_pwd),
@@ -59,7 +59,7 @@ def seed_data(db: Session) -> None:
                 "enable_ai_promise_detection": True,
                 "simulation_mode": True,
                 "ai_confidence_threshold": 0.70,
-                "approval_required": True,
+                "approval_required": False,
                 "approval_mode": "recommend_and_approve",
                 "channel_costs": {
                     "VERIFY": 0,

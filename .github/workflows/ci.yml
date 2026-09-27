@@ -22,7 +22,8 @@ jobs:
           pip install -r requirements-dev.txt
       - name: Run Pytest Suite
         env:
-          DATABASE_URL: "sqlite:///./ci_test.db"
+          DATABASE_URL: "sqlite:////tmp/ci_test.db"
+          ADMIN_INITIAL_PASSWORD: "password123"
           SESSION_SECRET: "ci-secret-for-testing-purposes-only-32bytes"
           ENVIRONMENT: "testing"
         run: |

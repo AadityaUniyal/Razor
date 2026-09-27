@@ -59,7 +59,8 @@ from database.connection import SessionLocal, engine, check_db_health
 from database.models import (
     User, Customer, RecoveryCase, PaymentEvent, CaseEvent,
     DecisionLedger, ActionRecord, PaymentPromise, ScheduledTask,
-    Notification, SystemHealthEvent, RecoveryPolicy, Role, CaseState, now_utc
+    Notification, SystemHealthEvent, RecoveryPolicy, Role, CaseState, now_utc,
+    ApprovalRequest, AIRecommendation
 )
 from database.init_db import init_db, seed_data
 
@@ -75,6 +76,8 @@ def cleanup_e2e_records(db: Session):
     """Purges all test fixtures tagged with RC_E2E to guarantee test independence."""
     test_cases = db.scalars(select(RecoveryCase).where(RecoveryCase.case_id.like("RC_E2E%"))).all()
     for tc in test_cases:
+        db.execute(delete(ApprovalRequest).where(ApprovalRequest.case_id_ref == tc.id))
+        db.execute(delete(AIRecommendation).where(AIRecommendation.case_id_ref == tc.id))
         db.execute(delete(ScheduledTask).where(ScheduledTask.case_id == tc.case_id))
         db.execute(delete(PaymentPromise).where(PaymentPromise.case_id_ref == tc.id))
         db.execute(delete(Notification).where(Notification.case_id_ref == tc.id))
@@ -85,6 +88,7 @@ def cleanup_e2e_records(db: Session):
         db.execute(delete(RecoveryCase).where(RecoveryCase.id == tc.id))
         if cust_id:
             db.execute(delete(Customer).where(Customer.id == cust_id))
+    db.execute(delete(ScheduledTask).where(ScheduledTask.case_id.like("RC_E2E%")))
     db.execute(delete(PaymentEvent).where(PaymentEvent.case_reference.like("RC_E2E%")))
     db.execute(delete(Customer).where(Customer.external_customer_id.like("cust_e2e%")))
     db.execute(delete(Customer).where(Customer.external_customer_id.like("rc_e2e%")))
@@ -1101,6 +1105,7 @@ def test_t4_scn_03_promise_expiration_and_single_bounded_followup(admin_client: 
     assert processed >= 1
 
     # Step 4: Verify follow-up sent and state updated
+    db_session.expire_all()
     promise = db_session.scalar(
         select(PaymentPromise).join(RecoveryCase, PaymentPromise.case_id_ref == RecoveryCase.id)
         .where(RecoveryCase.case_id == case_ref)

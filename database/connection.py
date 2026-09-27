@@ -10,8 +10,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import tempfile
+from pathlib import Path
+
 # Neon PostgreSQL cloud database connection (with automatic local SQLite fallback).
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip() or "sqlite:///./razor_fallback.db"
+_default_sqlite_path = (Path(tempfile.gettempdir()) / "razor_fallback.db").as_posix()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip() or f"sqlite:///{_default_sqlite_path}"
 
 # Normalise URL for psycopg driver if standard postgresql:// prefix is given
 if DATABASE_URL.startswith("postgresql://"):
@@ -45,6 +49,18 @@ else:
         engine_kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_timeout": 30})
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
+
+if is_sqlite:
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+        except Exception:
+            pass
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
