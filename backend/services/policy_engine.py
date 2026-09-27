@@ -5,14 +5,16 @@ from fastapi import HTTPException
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
+from backend.core.security import decrypt_secret
 from backend.services.ai_agent import (
     analyze_intent_resilient, fallback_ai, groq_intent,
     resolve_temporal_expression, CustomerIntent
 )
+from backend.services.razorpay_provider import RazorpayProvider
 from backend.services.strategy_scorer import calculate_strategy_scores
 from backend.services.websocket_manager import broadcast
 from database.models import (
-    RecoveryCase, RecoveryPolicy, ActionRecord, DecisionLedger,
+    RecoveryCase, RecoveryPolicy, ActionRecord, DecisionLedger, IntegrationCredential,
     PaymentPromise, ScheduledTask, Notification, CaseEvent, RecoveryOutcome, SuppressionRule,
     CaseState, AIEvaluationRecord, now_utc
 )
@@ -46,13 +48,28 @@ def latest_policy(db: Session, merchant_id: Optional[int] = None) -> RecoveryPol
         query = query.where((RecoveryPolicy.merchant_id == merchant_id) | RecoveryPolicy.merchant_id.is_(None))
     policy = db.scalar(query)
     if not policy:
-        raise HTTPException(500, "No active policy found")
+        # Self-healing fallback: Automatically create default active policy
+        policy = RecoveryPolicy(
+            merchant_id=merchant_id,
+            name="Default Production Policy",
+            version="v1.0-default",
+            active=True,
+            configuration={
+                "maximum_interventions": 3,
+                "minimum_hours_between_attempts": 24,
+                "minimum_amount_for_human_escalation": 10000,
+                "retry_strategy": "EXPONENTIAL_BACKOFF",
+            },
+        )
+        db.add(policy)
+        db.flush()
     return policy
 
 
 def to_case_dict(case: RecoveryCase) -> dict[str, Any]:
     return {
         "case_id": case.case_id,
+        "merchant_id": case.merchant_id,
         "customer_name": case.customer_name,
         "customer_email": case.customer_email,
         "amount": case.amount,
@@ -315,9 +332,31 @@ def process_case(db: Session, case: RecoveryCase, event_type: str, message: str 
         case.communication_count += 1
         case.retry_count += 1
         link_cost = policy.get("channel_costs", {}).get("RECOVERY_LINK", 2)
+
+        credential = db.scalar(
+            select(IntegrationCredential)
+            .where(IntegrationCredential.merchant_id == case.merchant_id, IntegrationCredential.provider == "razorpay")
+            .order_by(desc(IntegrationCredential.id))
+        )
+        key_id = credential.key_id if credential else None
+        key_secret = decrypt_secret(credential.secret_ref) if (credential and credential.secret_ref) else None
+        provider = RazorpayProvider(key_id=key_id, key_secret=key_secret)
+        plink = provider.create_payment_link(
+            amount=case.amount,
+            customer_name=case.customer_name,
+            customer_email=case.customer_email,
+            case_id=case.case_id,
+        )
+        recovery_url = plink.get("short_url") or f"https://rzp.io/i/{case.case_id.lower()}"
+
         record_action(
             db, case, "GENERATE_RECOVERY_LINK", "SENT",
-            {"reason": reason, "recovery_url": f"https://rzp.io/i/{case.case_id.lower()}"},
+            {
+                "reason": reason,
+                "recovery_url": recovery_url,
+                "payment_link_id": plink.get("id"),
+                "simulated": plink.get("simulated", True),
+            },
             channel="RECOVERY_LINK", cost=link_cost
         )
         db.add(Notification(

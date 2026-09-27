@@ -28,9 +28,11 @@ env/
 .coverage
 htmlcov/
 .hypothesis/
+*.log
 
 # Deployment and serverless
 .vercel/
+node_modules/
 
 # IDE and OS metadata
 .vscode/
@@ -40,9 +42,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Agent workspaces
+# Agent workspaces and scratch
 .agents/
-
-# Keep product tests under version control; ignore only generated test output.
-
-.vercel
+scratch/

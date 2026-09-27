@@ -7,12 +7,13 @@ from backend.core.config import GROQ_API_KEY, GROQ_MODEL, GEMINI_API_KEY, GEMINI
 from backend.core.security import get_current_user
 from backend.services.ai_agent import (
     analyze_intent_resilient,
+    draft_recovery_message,
     fallback_ai,
     resolve_temporal_expression,
     CustomerIntent
 )
 from database.connection import get_db
-from database.models import DecisionLedger, User
+from database.models import DecisionLedger, SystemHealthEvent, User
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -103,6 +104,22 @@ async def test_ai_intent(payload: dict[str, Any], db: Session = Depends(get_db),
     return await _handle_ai_classification(payload, db)
 
 
+@router.post("/draft-recovery-message")
+async def ai_recovery_draft(payload: dict[str, Any], user: User = Depends(get_current_user)):
+    """Return a personalized draft for approval; this endpoint never sends it."""
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else payload
+    if context.get("opted_out") or str(context.get("intent") or "").upper() == "OPT_OUT":
+        context = {**context, "opted_out": True}
+    draft, provider, latency = await draft_recovery_message(context, payload.get("provider"))
+    return {
+        **draft.model_dump(),
+        "provider_used": provider,
+        "latency_ms": latency,
+        "requires_approval": True,
+        "dispatch_status": "NOT_SENT",
+    }
+
+
 
 @router.get("/evaluation-metrics")
 def ai_evaluation_metrics(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -156,5 +173,6 @@ def ai_evaluation_metrics(db: Session = Depends(get_db), user: User = Depends(ge
         "promise_detection_rate": round((promise_detected / expected_promises) * 100, 1) if expected_promises else 0.0,
         "policy_acceptance_rate": policy_acceptance_rate,
         "ai_model": GROQ_MODEL if GROQ_API_KEY else "Deterministic Multi-lingual Fallback",
+        "fallback_events": db.scalar(select(func.count(SystemHealthEvent.id)).where(SystemHealthEvent.service_name == "groq", SystemHealthEvent.status.like("FALLBACK%"))) or 0,
         "benchmark_runs": eval_list,
     }

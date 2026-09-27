@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database.models import Merchant, User
@@ -25,8 +25,8 @@ def merchant_id_for_user(db: Session, user: Optional[User]) -> int:
 
 
 def tenant_filter(model, merchant_id: int):
-    """Include legacy NULL rows during migration, but never include another tenant."""
-    return or_(model.merchant_id == merchant_id, model.merchant_id.is_(None))
+    """Enforce strict multi-tenant isolation by filtering exclusively by merchant_id."""
+    return model.merchant_id == merchant_id
 
 
 def assign_legacy_tenant(db: Session, merchant_id: int) -> None:

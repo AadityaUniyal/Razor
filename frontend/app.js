@@ -16,6 +16,7 @@ const state = {
   customerSearch: "",
   customerFilter: "all",
   notificationOpen: false,
+  activePolicy: null,
 };
 
 // Utilities
@@ -33,6 +34,66 @@ const esc = (s) =>
   );
 
 const badgeClass = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+
+const humanize = (value) => String(value || "")
+  .replace(/([a-z])([A-Z])/g, "$1 $2")
+  .replace(/[_-]+/g, " ")
+  .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const renderStructuredObject = (obj, keyContext = "") => {
+  if (!obj || typeof obj !== "object") return "Not available";
+  // Channel costs: render structured chip grid with rupees
+  if (keyContext === "channel_costs" || obj.VERIFY !== undefined || obj.EMAIL !== undefined) {
+    return `
+      <div class="channel-cost-grid">
+        ${Object.entries(obj).map(([ch, cost]) => `
+          <div class="channel-cost-chip">
+            <span class="channel-name">${esc(humanize(ch))}</span>
+            <span class="channel-price">${money(cost)}</span>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+  // Database health: render structured card with status, latency, pool stats
+  if (keyContext === "database_health" || (obj.status && obj.pool)) {
+    const p = obj.pool || {};
+    const statusClass = String(obj.status).toLowerCase().includes("healthy") ? "recovered" : "escalated";
+    return `
+      <div class="db-health-card">
+        <div class="db-health-header">
+          <span class="badge ${statusClass}">${esc(obj.status || "UNKNOWN")}</span>
+          <span class="db-latency">${obj.latency_ms !== undefined ? `${obj.latency_ms}ms latency` : ""}</span>
+        </div>
+        <div class="pool-stat-group">
+          <span class="pool-stat-badge">Pool Size: ${p.size ?? "—"}</span>
+          <span class="pool-stat-badge ${p.checkedout > 0 ? "active" : ""}">Active: ${p.checkedout ?? 0}</span>
+          <span class="pool-stat-badge">Idle: ${p.checkedin ?? 0}</span>
+          ${p.overflow ? `<span class="pool-stat-badge overflow">Overflow: ${p.overflow}</span>` : ""}
+        </div>
+      </div>
+    `;
+  }
+  // Generic nested object
+  return `
+    <div class="nested-obj-grid">
+      ${Object.entries(obj).map(([k, val]) => `
+        <div class="nested-obj-item">
+          <span class="nested-key">${esc(humanize(k))}:</span>
+          <span class="nested-val">${typeof val === "object" && val !== null ? renderStructuredObject(val, k) : esc(displayValue(val))}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+};
+
+const displayValue = (value, keyContext = "") => {
+  if (value === null || value === undefined || value === "") return "Not available";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return Number.isInteger(value) ? value.toLocaleString("en-IN") : value.toFixed(2);
+  if (typeof value === "object") return renderStructuredObject(value, keyContext);
+  return String(value);
+};
 
 const formatDateTime = (iso) => {
   if (!iso) return "—";
@@ -76,6 +137,18 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+async function ensureActivePolicy() {
+  if (!state.activePolicy) {
+    try {
+      const policies = await api("/api/policies");
+      state.activePolicy = (policies && policies[0]) || null;
+    } catch {
+      state.activePolicy = null;
+    }
+  }
+  return state.activePolicy;
+}
+
 function setTemplate(name) {
   const t = $(`#${name}Template`);
   if (!t) return;
@@ -107,6 +180,69 @@ function renderMetricCard(label, val, hint = "", highlightClass = "") {
       <div class="metric-hint">${esc(hint)}</div>
     </div>
   `;
+}
+
+function renderAiOutput(result) {
+  const classification = result.classification || {};
+  const draft = result.recovery_draft || {};
+  const blocked = classification.intent === "OPT_OUT" || classification.intent === "DISPUTE" || draft.channel === "NONE";
+  const flags = (draft.risk_flags || []).map((flag) => '<span class="risk-chip">' + esc(humanize(flag)) + "</span>").join("");
+  return '<div class="ai-result-cards">' +
+    '<div class="ai-result-summary ' + (blocked ? "blocked" : "ready") + '">' +
+      '<div><span class="eyebrow">CLASSIFICATION</span><strong>' + esc(humanize(classification.intent || "Unknown")) + '</strong><small>' + esc(humanize(classification.recommended_next_action || "Review")) + " next · " + Math.round((Number(classification.confidence) || 0) * 100) + '% confidence</small></div>' +
+      '<span class="badge ' + (blocked ? "escalated" : "recovered") + '">' + (blocked ? "Review required" : "Ready for review") + "</span>" +
+    "</div>" +
+    '<div class="ai-draft-card">' +
+      '<div class="ai-draft-heading"><span><span class="eyebrow">RECOVERY DRAFT</span><b>' + esc(humanize(draft.objective || "Operator message")) + '</b></span><span class="badge wait">' + esc(humanize(draft.channel || "Not sent")) + "</span></div>" +
+      '<p class="ai-draft-message">' + esc(draft.message || "No draft available") + "</p>" +
+      '<div class="ai-draft-meta"><span>' + esc(humanize(draft.tone || "neutral")) + " tone</span><span>" + Math.round((Number(draft.confidence) || 0) * 100) + '% draft confidence</span><span>Dispatch: ' + esc(humanize(draft.dispatch_status || "Not sent")) + "</span></div>" +
+      '<div class="approval-flags">' + (flags || '<span class="safe-chip">NO POLICY FLAGS</span>') + "</div>" +
+    "</div>" +
+  "</div>";
+}
+
+const onboardingSteps = [
+  {
+    title: "Connect your payment workspace.",
+    copy: "Start in Controls & Connections to connect Razorpay and choose how your team reviews recovery recommendations.",
+    visual: "1",
+    view: "settings",
+  },
+  {
+    title: "Review your first recovery opportunity.",
+    copy: "Every failed payment becomes a contextual case. Open the queue to see customer history, risk, and the safest next step.",
+    visual: "2",
+    view: "queue",
+  },
+  {
+    title: "Measure what actually recovered.",
+    copy: "Use Analytics to separate verified recovery from gross activity and understand which actions are worth repeating.",
+    visual: "3",
+    view: "analytics",
+  },
+];
+
+let onboardingIndex = 0;
+
+function closeOnboarding() {
+  $("#onboardingModal")?.classList.add("hidden");
+  if (state.user?.email) localStorage.setItem("rr_onboarding_seen:" + state.user.email, "1");
+}
+
+function renderOnboardingStep() {
+  const step = onboardingSteps[onboardingIndex];
+  $("#onboardingStepLabel").textContent = "STEP " + (onboardingIndex + 1) + " OF " + onboardingSteps.length;
+  $("#onboardingProgress").style.width = ((onboardingIndex + 1) / onboardingSteps.length * 100) + "%";
+  $("#onboardingTitle").textContent = step.title;
+  $("#onboardingCopy").textContent = step.copy;
+  $("#onboardingVisual").innerHTML = '<span class="onboarding-number">' + step.visual + '</span><span><b>' + humanize(step.view) + '</b><small>Next best place to start</small></span>';
+  $("[data-onboarding-next]").textContent = onboardingIndex === onboardingSteps.length - 1 ? "Open workspace" : "Next step";
+}
+
+function maybeShowOnboarding() {
+  if (!state.user?.email || localStorage.getItem("rr_onboarding_seen:" + state.user.email)) return;
+  $("#onboardingModal")?.classList.remove("hidden");
+  renderOnboardingStep();
 }
 
 // ==============================================================================
@@ -179,7 +315,7 @@ async function renderOverview() {
           <p>${esc(a.message || "Payment event processed")}</p>
         </div>
       </div>
-    `).join("") || `<p style="font-size:12px; color:var(--text-muted);">No activity recorded yet.</p>`;
+    `).join("") || `<p class="empty-caption">No activity recorded yet.</p>`;
 
   // Attention Queue
   const needingAttention = cases.filter((c) => !c.recovered && c.state !== "STOP").slice(0, 5);
@@ -206,10 +342,10 @@ async function renderOverview() {
                 <td><b>${esc(c.case_id)}</b></td>
                 <td>${esc(c.customer_name)}</td>
                 <td>${money(c.amount)}</td>
-                <td><span style="font-size:11px;">${esc(c.failure_category)}</span></td>
+                <td><span class="text-xs">${esc(c.failure_category)}</span></td>
                 <td><span class="badge ${badgeClass(c.state)}">${esc(c.state)}</span></td>
                 <td><b>${esc(c.current_action)}</b></td>
-                <td><button class="btn-secondary" style="padding:4px 10px; font-size:11px;" data-open-case="${esc(c.case_id)}">Inspect</button></td>
+                <td><button class="btn-secondary btn-compact" data-open-case="${esc(c.case_id)}">Inspect</button></td>
               </tr>
             `
               )
@@ -218,7 +354,8 @@ async function renderOverview() {
         </table>
       </div>
     `
-    : `<p style="font-size:13px; color:var(--text-muted);">All active recovery cases are currently resolved or stopped.</p>`;
+    : `<p class="empty-subline">All active recovery cases are currently resolved or stopped.</p>`;
+  if (!state.cases.length) maybeShowOnboarding();
 }
 
 // 2. RECOVERY QUEUE & CASE DETAIL INSPECTOR
@@ -264,19 +401,19 @@ async function renderQueue() {
             (c) => `
             <tr class="clickable" data-open-case="${esc(c.case_id)}">
               <td><b>${esc(c.case_id)}</b></td>
-              <td>${esc(c.customer_name)}<br><small style="color:var(--text-sub);">${esc(c.customer_email)}</small></td>
+              <td>${esc(c.customer_name)}<br><small class="cell-subtext">${esc(c.customer_email)}</small></td>
               <td><b>${money(c.amount)}</b></td>
-              <td><span style="font-size:11px; font-family:'JetBrains Mono', monospace;">${esc(c.failure_category)}</span></td>
+              <td><span class="cell-mono">${esc(c.failure_category)}</span></td>
               <td><span class="badge ${badgeClass(c.state)}">${esc(c.state)}</span></td>
               <td>${esc(c.retry_count)} retries / ${esc(c.communication_count)} comms</td>
               <td><b>${esc(c.current_action)}</b></td>
-              <td><span style="font-weight:700; color:var(--primary);">${esc(c.strategy_score ?? 0)}</span></td>
+              <td><span class="cell-score">${esc(c.strategy_score ?? 0)}</span></td>
               <td>${formatDateTime(c.updated_at)}</td>
             </tr>
           `
           )
           .join("")
-      : `<tr><td colspan="9" style="text-align:center; padding:32px; color:var(--text-muted);">No cases match the selected filter.</td></tr>`;
+      : `<tr><td colspan="9" class="table-empty-cell">No cases match the selected filter.</td></tr>`;
   }
 
   state.applyQueueFilters = applyQueueFilters;
@@ -318,13 +455,14 @@ async function renderQueue() {
 
 async function showCaseInspector(caseId) {
   state.selectedCaseId = caseId;
+  await ensureActivePolicy();
   const data = await api(`/api/cases/${caseId}`);
   const c = data.case;
   const latestDecision = data.decisions[0] || {};
 
   $("#caseDetailDrawer").classList.remove("hidden");
   $("#detailCaseId").textContent = `CASE INSPECTOR / ${c.case_id}`;
-  $("#detailHeaderTitle").innerHTML = `${money(c.amount)} <span class="badge ${badgeClass(c.state)}">${esc(c.state)}</span>`;
+  $("#detailHeaderTitle").innerHTML = `${money(c.amount)} <span class="badge ${badgeClass(c.state)}">${esc(humanize(c.state))}</span>`;
 
   // Explainer Card
   const explainerCard = $("#decisionExplainerCard");
@@ -343,29 +481,31 @@ async function showCaseInspector(caseId) {
         const isSelected = act === latestDecision.selected_action;
         return `
           <div class="strategy-score-chip ${isSelected ? "selected" : ""}">
-          <span>${esc(act)}</span>
+            <span>${esc(act)}</span>
             <strong>${esc(details.score)}</strong>
-            <small style="color:var(--text-sub);">${esc(Math.round((details.expected_probability || 0) * 100))}% prob</small>
+            <small class="score-prob">${esc(Math.round((details.expected_probability || 0) * 100))}% prob</small>
           </div>
         `;
       })
       .join("");
   } else {
-    scoresGrid.innerHTML = `<span style="color:var(--text-muted); font-size:12px;">Strategy scores evaluated deterministically.</span>`;
+    scoresGrid.innerHTML = `<span class="empty-scores">Strategy scores evaluated deterministically.</span>`;
   }
 
   // Deterministic Factors
+  const maxComms = state.activePolicy?.configuration?.maximum_customer_communications ?? 3;
+  const maxAttempts = state.activePolicy?.configuration?.maximum_automated_attempts ?? 3;
   const factorsList = $("#deterministicFactorsList");
   const factors = latestDecision.deterministic_factors || {};
   factorsList.innerHTML = `
-    <div class="factor-item ${c.recovered ? "pass" : "pass"}">
-      ${c.recovered ? "✓" : "•"} Payment verified state: <b>${c.recovered ? "CAPTURED" : "PENDING"}</b>
+    <div class="factor-item ${c.recovered ? "pass" : "fail"}">
+      ${c.recovered ? "✓" : "✗"} Payment verified state: <b>${c.recovered ? "CAPTURED" : "PENDING"}</b>
     </div>
-    <div class="factor-item ${c.communication_count < 3 ? "pass" : "fail"}">
-      ${c.communication_count < 3 ? "✓" : "✗"} Communication limit check: ${esc(c.communication_count)}/3 used
+    <div class="factor-item ${c.communication_count < maxComms ? "pass" : "fail"}">
+      ${c.communication_count < maxComms ? "✓" : "✗"} Communication limit check: ${esc(c.communication_count)}/${maxComms} used
     </div>
-    <div class="factor-item ${c.retry_count < 3 ? "pass" : "fail"}">
-      ${c.retry_count < 3 ? "✓" : "✗"} Automated retry limit check: ${esc(c.retry_count)}/3 used
+    <div class="factor-item ${c.retry_count < maxAttempts ? "pass" : "fail"}">
+      ${c.retry_count < maxAttempts ? "✓" : "✗"} Automated retry limit check: ${esc(c.retry_count)}/${maxAttempts} used
     </div>
     <div class="factor-item ${!factors.customer_opted_out ? "pass" : "fail"}">
       ${!factors.customer_opted_out ? "✓" : "✗"} Customer opt-out status: ${factors.customer_opted_out ? "OPTED OUT" : "ACTIVE"}
@@ -385,46 +525,109 @@ async function showCaseInspector(caseId) {
   actionList.innerHTML = data.actions.length
     ? data.actions
         .map(
-          (a) => `
-        <div style="padding:8px 0; border-bottom:1px solid var(--border); font-size:12px;">
-          <b>${esc(a.action_type)}</b> · <span class="badge ${badgeClass(a.status)}">${esc(a.status)}</span>
-          <span style="float:right; color:var(--text-sub);">${money(a.cost)} cost</span>
-          <p style="color:var(--text-muted); margin-top:2px;">${formatDateTime(a.created_at)}</p>
-        </div>
-      `
+          (a) => {
+            const hasResult = a.result && typeof a.result === "object" && Object.keys(a.result).length > 0;
+            return `
+              <div class="action-record-item">
+                <b>${esc(humanize(a.action_type))}</b> · <span class="badge ${badgeClass(a.status)}">${esc(humanize(a.status))}</span>
+                <span class="action-cost">${money(a.cost)} cost</span>
+                <p class="action-time">${formatDateTime(a.created_at)}</p>
+                ${hasResult ? `
+                  <details class="item-details-drawer">
+                    <summary class="item-details-summary">Execution Details</summary>
+                    <div class="item-details-content">
+                      ${Object.entries(a.result).map(([k, v]) => `
+                        <div class="item-details-row">
+                          <span class="item-details-key">${esc(humanize(k))}:</span>
+                          <span class="item-details-val">${typeof v === "object" && v !== null ? esc(JSON.stringify(v)) : esc(String(v))}</span>
+                        </div>
+                      `).join("")}
+                    </div>
+                  </details>
+                ` : ""}
+              </div>
+            `;
+          }
         )
         .join("")
-    : `<p style="font-size:12px; color:var(--text-muted);">No recovery actions executed yet.</p>`;
+    : `<p class="empty-actions">No recovery actions executed yet.</p>`;
 
   // Timeline
   const timelineList = $("#detailTimeline");
   timelineList.innerHTML = data.events.length ? data.events
     .slice()
     .reverse()
-    .slice(0, 6)
     .map(
-      (e) => `
-      <div class="timeline-item" data-tone="${String(e.event_type || "").toLowerCase().includes("captur") || String(e.event_type || "").toLowerCase().includes("recover") ? "success" : String(e.event_type || "").toLowerCase().includes("fail") || String(e.event_type || "").toLowerCase().includes("dispute") ? "warning" : "info"}">
-        <span class="timeline-time">${formatDateTime(e.created_at)}</span>
-        <div class="timeline-body">
-          <b>${esc(e.event_type)}</b>
-          <p>${esc(e.message)}</p>
-        </div>
-      </div>
-    `
-      )
+      (e) => {
+        const hasDetails = e.details && typeof e.details === "object" && Object.keys(e.details).length > 0;
+        return `
+          <div class="timeline-item" data-tone="${String(e.event_type || "").toLowerCase().includes("captur") || String(e.event_type || "").toLowerCase().includes("recover") ? "success" : String(e.event_type || "").toLowerCase().includes("fail") || String(e.event_type || "").toLowerCase().includes("dispute") ? "warning" : "info"}">
+            <span class="timeline-time">${formatDateTime(e.created_at)}</span>
+            <div class="timeline-body">
+              <b>${esc(humanize(e.event_type))}</b>
+              <p>${esc(e.message)}</p>
+              ${hasDetails ? `
+                <details class="item-details-drawer">
+                  <summary class="item-details-summary">Event Parameters</summary>
+                  <div class="item-details-content">
+                    ${Object.entries(e.details).map(([k, v]) => `
+                      <div class="item-details-row">
+                        <span class="item-details-key">${esc(humanize(k))}:</span>
+                        <span class="item-details-val">${typeof v === "object" && v !== null ? esc(JSON.stringify(v)) : esc(String(v))}</span>
+                      </div>
+                    `).join("")}
+                  </div>
+                </details>
+              ` : ""}
+            </div>
+          </div>
+        `;
+      }
+    )
     .join("") : `<div class="table-empty-state"><span class="empty-icon blue">•</span><b>No lifecycle events yet</b><small>Provider and customer signals will appear here.</small></div>`;
 
   // Operator Action Handlers
   const canOperate = ["ADMIN", "OPERATOR"].includes(state.user?.role);
-  ["#btnActionVerify", "#btnActionLink", "#btnActionEscalate", "#btnActionCapture", "#btnActionStop"].forEach((selector) => {
+  ["#btnActionRecommend", "#btnActionVerify", "#btnActionLink", "#btnActionEscalate", "#btnActionCapture", "#btnActionStop"].forEach((selector) => {
     const button = $(selector);
     if (button) {
       button.disabled = !canOperate;
       button.title = canOperate ? "" : "Operator role required";
     }
   });
-  $("#btnActionVerify").onclick = () => executeOperatorAction(caseId, "VERIFY");
+  const btnRec = $("#btnActionRecommend");
+  if (btnRec) {
+    btnRec.onclick = async () => {
+      try {
+        const res = await api(`/api/cases/${caseId}/recommendations`, {
+          method: "POST",
+          body: { message: "Operator requested recommendation" },
+        });
+        showRzpToast("AI Recommendation Generated", `Action: ${res.recommendation?.recommended_action || "action queued for approval"}`, "success");
+        await showCaseInspector(caseId);
+      } catch (err) {
+        showRzpToast("Recommendation Failed", err.message, "error");
+      }
+    };
+  }
+  $("#btnActionVerify").onclick = async () => {
+    try {
+      const res = await api(`/api/cases/${caseId}/verify-payment`, {
+        method: "POST",
+        body: {},
+      });
+      if (res.status === "MATCHED") {
+        showRzpToast("Gateway Verified", "Payment matched and case marked as recovered.", "success");
+      } else {
+        showRzpToast("Verification Result", `Status: ${res.status}${res.error ? ` (${res.error})` : ""}`, "warning");
+      }
+      state.cases = await api("/api/cases");
+      state.applyQueueFilters?.();
+      await showCaseInspector(caseId);
+    } catch (err) {
+      showRzpToast("Verification Failed", err.message, "error");
+    }
+  };
   $("#btnActionLink").onclick = () => executeOperatorAction(caseId, "RECOVER");
   $("#btnActionEscalate").onclick = () => executeOperatorAction(caseId, "ESCALATE");
   $("#btnActionCapture").onclick = () => executeOperatorAction(caseId, "CAPTURE_PAYMENT");
@@ -505,9 +708,9 @@ async function renderPromises() {
           <td><b>${esc(p.case_id)}</b></td>
           <td>${esc(p.customer)}</td>
           <td><b>${money(p.amount)}</b></td>
-          <td style="max-width:280px; font-style:italic;">"${esc(p.promise_text)}"</td>
+          <td class="cell-promise-text">"${esc(p.promise_text)}"</td>
           <td><b>${formatDateTime(p.promised_at)}</b></td>
-          <td><span style="font-family:'JetBrains Mono', monospace; font-weight:700;">${Math.round((p.confidence || 0.9) * 100)}%</span></td>
+          <td><span class="cell-confidence">${Math.round((p.confidence || 0.9) * 100)}%</span></td>
           <td><span class="badge ${p.status === "FULFILLED" ? "recovered" : p.status === "FOLLOW_UP_SENT" ? "escalated" : "wait"}">${esc(p.status)}</span></td>
           <td>${p.follow_up_sent ? "Yes (1 follow-up)" : "No (Grace period)"}</td>
         </tr>`).join("")
@@ -543,19 +746,90 @@ async function renderCustomers() {
     });
     $("#customersTableBody").innerHTML = rows.length ? rows.map((customer) => {
       const caseId = customer.case_ids?.[0] || "";
-      return `<tr class="customer-row" ${caseId ? `data-open-case="${esc(caseId)}"` : ""}>
+      const customerAttr = customer.id ? `data-customer-id="${esc(customer.id)}"` : (caseId ? `data-open-case="${esc(caseId)}"` : "");
+      return `<tr class="customer-row clickable" ${customerAttr}>
         <td><div class="customer-identity"><span class="customer-avatar">${esc((customer.name || "?").slice(0, 1).toUpperCase())}</span><span><b>${esc(customer.name || "Unknown")}</b><small>${esc(customer.email)}</small></span></div></td>
         <td><span class="relationship-count">${esc(customer.case_count)} case${customer.case_count === 1 ? "" : "s"}</span></td>
         <td><b class="money-risk">${money(customer.at_risk)}</b></td><td><b class="money-recovered">${money(customer.recovered)}</b></td>
         <td><span class="language-pill">${esc((customer.language || "en").toUpperCase())}</span></td>
         <td><span class="consent-pill ${customer.opt_out ? "blocked" : "active"}">${customer.opt_out ? "Opted out" : "Active"}</span></td>
-        <td>${formatDateTime(customer.last_seen)}</td><td>${caseId ? '<span class="row-arrow">→</span>' : ""}</td>
+        <td>${formatDateTime(customer.last_seen)}</td><td><span class="row-arrow">→</span></td>
       </tr>`;
     }).join("") : `<tr><td colspan="8"><div class="table-empty-state"><span class="empty-icon blue">⌕</span><b>No customers match those filters</b><small>Try a different name, email, or relationship filter.</small></div></td></tr>`;
   };
   $("#customerSearchInput").oninput = (event) => { state.customerSearch = event.target.value.trim(); applyCustomerFilters(); };
   $("#customerFilterSelect").onchange = (event) => { state.customerFilter = event.target.value; applyCustomerFilters(); };
   applyCustomerFilters();
+}
+
+async function showCustomerTimeline(customerId) {
+  try {
+    const data = await api(`/api/customers/${customerId}/timeline`);
+    const cust = data.customer || {};
+    const cases = data.cases || [];
+    const events = data.events || [];
+
+    const drawer = $("#customerTimelineDrawer");
+    if (!drawer) return;
+    drawer.classList.remove("hidden");
+
+    $("#customerTimelineBreadcrumb").textContent = `CUSTOMER / ${cust.email || cust.name || customerId}`;
+    $("#customerTimelineTitle").textContent = `${cust.name || "Customer"} History & Timeline`;
+
+    const content = $("#customerTimelineContent");
+    if (content) {
+      content.innerHTML = `
+        <div class="customer-timeline-layout">
+          <div class="panel" style="background:#f8fafc; margin-bottom:16px;">
+            <h4 style="font-size:13px; margin-bottom:8px;">Customer Relationship Profile</h4>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:12px;">
+              <div><b>Name:</b> <span>${esc(cust.name || "Unknown")}</span></div>
+              <div><b>Email:</b> <span>${esc(cust.email || "—")}</span></div>
+              <div><b>Language:</b> <span class="language-pill">${esc((cust.language || "en").toUpperCase())}</span></div>
+              <div><b>Consent:</b> <span class="consent-pill ${cust.opted_out ? "blocked" : "active"}">${cust.opted_out ? "Opted out" : "Active"}</span></div>
+              <div><b>External ID:</b> <code>${esc(cust.external_customer_id || "—")}</code></div>
+              <div><b>Cases Tracked:</b> <span>${cases.length} case${cases.length === 1 ? "" : "s"}</span></div>
+            </div>
+          </div>
+
+          <div class="panel" style="margin-bottom:16px;">
+            <h4 style="font-size:13px; margin-bottom:8px;">Associated Recovery Cases</h4>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              ${cases.length ? cases.map((cId) => `
+                <button class="btn-secondary btn-compact" data-open-case="${esc(cId)}" type="button">
+                  Case ${esc(cId)} →
+                </button>
+              `).join("") : `<span class="cell-subtext">No cases recorded for this profile.</span>`}
+            </div>
+          </div>
+
+          <div class="panel">
+            <h4 style="font-size:13px; margin-bottom:8px;">Aggregated Activity Timeline (${events.length} events)</h4>
+            <div class="lifecycle-timeline">
+              ${events.length ? events.map((e) => `
+                <div class="timeline-item" data-tone="${String(e.type || "").toLowerCase().includes("recover") || String(e.type || "").toLowerCase().includes("captur") ? "success" : String(e.type || "").toLowerCase().includes("fail") ? "warning" : "info"}">
+                  <span class="timeline-time">${formatDateTime(e.created_at)}</span>
+                  <div class="timeline-body">
+                    <b>${esc(humanize(e.type))}</b> · <span class="cell-mono-xs">${esc(e.case_id || "")}</span>
+                    <p>${esc(e.message)}</p>
+                  </div>
+                </div>
+              `).join("") : `<div class="table-empty-state"><span class="empty-icon blue">•</span><b>No timeline events</b><small>Activity across all cases will aggregate here.</small></div>`}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    const closeBtn = $("#closeCustomerTimelineBtn");
+    if (closeBtn) {
+      closeBtn.onclick = () => {
+        drawer.classList.add("hidden");
+      };
+    }
+  } catch (err) {
+    showRzpToast("Unable to load customer timeline", err.message, "error");
+  }
 }
 
 // 5. AI SANDBOX & BENCHMARKS
@@ -574,16 +848,16 @@ async function renderAI() {
         .map(
           (b) => `
       <tr>
-        <td style="font-size:12px;">"${esc(b.message)}"</td>
+        <td class="benchmark-message">"${esc(b.message)}"</td>
         <td><span class="badge stop">${esc(b.expected_intent)}</span></td>
         <td><span class="badge ${b.matched ? "recovered" : "escalated"}">${esc(b.predicted_intent)}</span></td>
         <td><b>${Math.round((b.confidence || 0) * 100)}%</b></td>
-        <td>${b.matched ? '<span style="color:#059669; font-weight:700;">✓ Pass</span>' : '<span style="color:#b91c1c; font-weight:700;">✗ Fail</span>'}</td>
+        <td>${b.matched ? '<span class="status-pass">✓ Pass</span>' : '<span class="status-fail">✗ Fail</span>'}</td>
       </tr>
     `
         )
         .join("")
-    : `<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">No benchmark rows available.</td></tr>`;
+    : `<tr><td colspan="5" class="table-empty-cell">No benchmark rows available.</td></tr>`;
 }
 
 // 6. DECISION LEDGER
@@ -608,16 +882,66 @@ async function renderAudit() {
       return matchesQuery && (result === "all" || row.policy_result === result);
     });
     $("#auditTableBody").innerHTML = visible.length
-      ? visible.map((d) => `
-        <tr class="clickable" data-open-case="${esc(d.case_id)}">
-          <td style="font-family:'JetBrains Mono', monospace; font-size:11px;">${formatDateTime(d.created_at)}</td>
-          <td><b>${esc(d.case_id)}</b></td>
-          <td><b>${esc(d.selected_action)}</b></td>
-          <td><span class="badge ${d.policy_result === "APPROVED" ? "recovered" : "escalated"}">${esc(d.policy_result)}</span></td>
-          <td style="max-width:320px;">${esc(d.policy_reason)}</td>
-          <td><span style="font-size:11px;">${esc(d.ai_analysis?.intent || "DETERMINISTIC")}</span></td>
-        </tr>`).join("")
-      : `<tr><td colspan="6"><div class="table-empty-state"><span class="empty-icon green">✓</span><b>No ledger entries match this view</b><small>Try clearing the search or result filter.</small></div></td></tr>`;
+      ? visible.map((d) => {
+          const hasScores = d.strategy_scores && typeof d.strategy_scores === "object" && Object.keys(d.strategy_scores).length > 0;
+          const hasFactors = d.deterministic_factors && typeof d.deterministic_factors === "object" && Object.keys(d.deterministic_factors).length > 0;
+          const scoreCount = hasScores ? Object.keys(d.strategy_scores).length : 0;
+          const factorCount = hasFactors ? Object.keys(d.deterministic_factors).length : 0;
+
+          return `
+            <tr class="clickable" data-open-case="${esc(d.case_id)}">
+              <td class="cell-mono-xs">${formatDateTime(d.created_at)}</td>
+              <td><b>${esc(d.case_id)}</b></td>
+              <td><b>${esc(d.selected_action)}</b></td>
+              <td><span class="badge ${d.policy_result === "APPROVED" ? "recovered" : "escalated"}">${esc(d.policy_result)}</span></td>
+              <td class="cell-reason">${esc(d.policy_reason)}</td>
+              <td><span class="cell-intent">${esc(d.ai_analysis?.intent || "DETERMINISTIC")}</span></td>
+              <td class="audit-context-cell">
+                ${(hasScores || hasFactors) ? `
+                  <details class="audit-context-details">
+                    <summary class="audit-context-summary">
+                      <span>${scoreCount} scores · ${factorCount} factors</span>
+                    </summary>
+                    <div class="audit-context-pop">
+                      ${hasScores ? `
+                        <div class="audit-context-section">
+                          <strong>Strategy Scores:</strong>
+                          <div class="audit-score-chips">
+                            ${Object.entries(d.strategy_scores).map(([action, s]) => `
+                              <div class="audit-score-chip ${action === d.selected_action ? "selected" : ""}">
+                                <span class="chip-action">${esc(action)}</span>
+                                <span class="chip-score">${esc(s.score ?? "—")}</span>
+                                <span class="chip-prob">${Math.round((s.expected_probability ?? 0) * 100)}%</span>
+                                ${s.expected_value !== undefined ? `<span class="chip-ev">₹${Math.round(s.expected_value)}</span>` : ""}
+                              </div>
+                            `).join("")}
+                          </div>
+                        </div>
+                      ` : ""}
+                      ${hasFactors ? `
+                        <div class="audit-context-section">
+                          <strong>Deterministic Factors:</strong>
+                          <div class="audit-factor-chips">
+                            ${Object.entries(d.deterministic_factors).map(([fKey, fVal]) => {
+                              const isPass = fVal === false || fVal === "ACTIVE" || fVal === "CAPTURED" || (typeof fVal === "number" && fVal < 3);
+                              return `
+                                <div class="audit-factor-chip ${isPass ? "pass" : "warn"}">
+                                  <span>${esc(humanize(fKey))}:</span>
+                                  <b>${esc(String(fVal))}</b>
+                                </div>
+                              `;
+                            }).join("")}
+                          </div>
+                        </div>
+                      ` : ""}
+                    </div>
+                  </details>
+                ` : `<span class="cell-subtext">—</span>`}
+              </td>
+            </tr>
+          `;
+        }).join("")
+      : `<tr><td colspan="7"><div class="table-empty-state"><span class="empty-icon green">✓</span><b>No ledger entries match this view</b><small>Try clearing the search or result filter.</small></div></td></tr>`;
   };
   $("#auditSearchInput").oninput = applyAuditFilters;
   $("#auditResultSelect").onchange = applyAuditFilters;
@@ -627,7 +951,12 @@ async function renderAudit() {
 // 7. ANALYTICS & ROI
 async function renderAnalytics() {
   setTemplate("analytics");
-  const [metrics, summary, trends] = await Promise.all([api("/api/dashboard/metrics"), api("/api/dashboard/summary"), api("/api/dashboard/trends?days=14")]);
+  const [metrics, summary, trends, lift] = await Promise.all([
+    api("/api/dashboard/metrics"),
+    api("/api/dashboard/summary"),
+    api("/api/dashboard/trends?days=14"),
+    api("/api/analytics/recovery-lift").catch(() => null),
+  ]);
 
   $("#analyticsStatsGrid").innerHTML =
     renderMetricCard("Recovered Cases", metrics.recovered_cases, "Closed successfully", "highlight-green") +
@@ -642,13 +971,13 @@ async function renderAnalytics() {
       const total = val.at_risk + val.recovered;
       const pct = Math.round((total / maxVal) * 100);
       return `
-        <div style="margin-bottom:14px;">
-          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+        <div class="category-bar-group">
+          <div class="category-bar-label">
             <b>${esc(cat)}</b>
             <span>${money(val.recovered)} recovered / ${money(total)}</span>
           </div>
-          <div style="height:10px; background:#e2e8f0; border-radius:99px; overflow:hidden;">
-            <div style="height:100%; width:${pct}%; background:var(--brand-blue); border-radius:99px;"></div>
+          <div class="category-bar-track">
+            <div class="category-bar-fill" style="width:${pct}%;"></div>
           </div>
         </div>
       `;
@@ -658,13 +987,13 @@ async function renderAnalytics() {
   $("#analyticsRoiSummary").innerHTML = `
     <p><b>Gross Revenue Recovered:</b> ${money(summary.total_recovered)}</p>
     <p><b>Operational Intervention Costs:</b> ${money(summary.total_intervention_costs)}</p>
-    <p><b>Net Revenue Added to Merchant:</b> <span style="font-size:16px; font-weight:800; color:#059669;">${money(summary.net_recovery_value)}</span></p>
-    <p style="color:var(--text-muted); font-size:12px; margin-top:8px;">
+    <p><b>Net Revenue Added to Merchant:</b> <span class="roi-net-recovered">${money(summary.net_recovery_value)}</span></p>
+    <p class="roi-model-caption">
       Intervention Cost Model: Verification = ₹0, Email = ₹1, WhatsApp = ₹2, SMS = ₹3, Human Escalation = ₹100.
     </p>
   `;
   renderTrendChart(trends.series || []);
-  renderRecoveryLift(metrics.recovery_lift || summary.recovery_lift || null);
+  renderRecoveryLift(lift || metrics.recovery_lift || summary.recovery_lift || null);
   renderRiskHeatmap(metrics.by_category || {});
 }
 
@@ -716,16 +1045,23 @@ function renderRecoveryLift(lift) {
   const target = $("#analyticsLiftPanel");
   const badge = $("#liftStatusBadge");
   if (!target) return;
-  const treatment = Number(lift?.treatment_recovery_rate ?? lift?.treatment_rate);
-  const holdout = Number(lift?.holdout_recovery_rate ?? lift?.holdout_rate);
-  if (!Number.isFinite(treatment) || !Number.isFinite(holdout)) {
-    if (badge) badge.textContent = "Awaiting holdout";
+  const treatment = Number(lift?.treatment_recovery_rate ?? lift?.treatment_rate ?? lift?.treatment?.recovery_rate);
+  const holdout = Number(lift?.holdout_recovery_rate ?? lift?.holdout_rate ?? lift?.holdout?.recovery_rate);
+  const sampleSize = Number(lift?.sample_size ?? ((lift?.treatment?.cases || 0) + (lift?.holdout?.cases || 0)));
+  if (!lift || !Number.isFinite(treatment) || !Number.isFinite(holdout) || sampleSize === 0) {
+    if (badge) {
+      badge.textContent = "Awaiting holdout";
+      badge.className = "badge";
+    }
     target.innerHTML = `<div class="lift-empty">A control group is required before the product claims incremental recovery lift. Assign an experiment to make this view measurable.</div>`;
     return;
   }
   const liftValue = treatment - holdout;
-  if (badge) { badge.textContent = `${liftValue >= 0 ? "+" : ""}${liftValue.toFixed(1)} pts`; badge.className = `badge ${liftValue >= 0 ? "recovered" : "escalated"}`; }
-  target.innerHTML = `<div class="lift-stat"><span><small>Treatment recovery rate</small><strong class="safe-text">${treatment.toFixed(1)}%</strong></span><span class="lift-arrow">→</span><span><small>Holdout recovery rate</small><strong>${holdout.toFixed(1)}%</strong></span></div><div class="lift-stat"><span><small>Incremental recovery</small><strong>${liftValue >= 0 ? "+" : ""}${liftValue.toFixed(1)} pts</strong></span><small>${esc(lift.sample_size ? `${lift.sample_size} customers measured` : "Measured against assigned control")}</small></div>`;
+  if (badge) {
+    badge.textContent = `${liftValue >= 0 ? "+" : ""}${liftValue.toFixed(1)} pts`;
+    badge.className = `badge ${liftValue >= 0 ? "recovered" : "escalated"}`;
+  }
+  target.innerHTML = `<div class="lift-stat"><span><small>Treatment recovery rate</small><strong class="safe-text">${treatment.toFixed(1)}%</strong></span><span class="lift-arrow">→</span><span><small>Holdout recovery rate</small><strong>${holdout.toFixed(1)}%</strong></span></div><div class="lift-stat"><span><small>Incremental recovery</small><strong>${liftValue >= 0 ? "+" : ""}${liftValue.toFixed(1)} pts</strong></span><small>${esc(sampleSize ? `${sampleSize} customers measured` : "Measured against assigned control")}</small></div>`;
 }
 
 function renderRiskHeatmap(categories) {
@@ -754,28 +1090,34 @@ async function renderSettings() {
   $("#policyVersionBadge").textContent = activePolicy.version || "v1.2";
   $("#policyConfigList").innerHTML = activePolicy.configuration
     ? Object.entries(activePolicy.configuration)
-        .map(([k, v]) => `
-          <div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px;">
-            <span style="color:var(--text-muted);">${esc(k.replace(/_/g, " "))}</span>
-            <b>${esc(typeof v === "object" && v !== null ? JSON.stringify(v) : v)}</b>
-          </div>
-        `)
+        .map(([k, v]) => {
+          const isComplex = typeof v === "object" && v !== null;
+          return `
+            <div class="settings-kv-row ${isComplex ? "settings-kv-stacked" : ""}">
+              <span class="settings-kv-label">${esc(k.replace(/_/g, " "))}</span>
+              <div class="settings-kv-val">${displayValue(v, k)}</div>
+            </div>
+          `;
+        })
         .join("")
     : "No policy found.";
 
   $("#systemHealthDetails").innerHTML = Object.entries(health)
     .filter(([k]) => k !== "recent_events")
-    .map(([k, v]) => `
-      <div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px;">
-        <span style="color:var(--text-muted);">${esc(k.replace(/_/g, " "))}</span>
-        <b style="font-family:'JetBrains Mono', monospace;">${esc(typeof v === "object" && v !== null ? JSON.stringify(v) : v)}</b>
-      </div>
-    `)
+    .map(([k, v]) => {
+      const isComplex = typeof v === "object" && v !== null;
+      return `
+        <div class="settings-kv-row ${isComplex ? "settings-kv-stacked" : ""}">
+          <span class="settings-kv-label">${esc(k.replace(/_/g, " "))}</span>
+          <div class="settings-kv-val">${displayValue(v, k)}</div>
+        </div>
+      `;
+    })
     .join("");
   $("#healthEvents").innerHTML = (health.recent_events || []).slice(0, 6).map((event) => `<div class="health-event"><span class="health-event-dot ${String(event.status).includes("FAILED") ? "bad" : "good"}"></span><span><b>${esc(event.service_name)}</b><small>${esc(event.status)}</small></span><time>${formatDateTime(event.created_at)}</time></div>`).join("") || `<p class="muted-caption">No recent subsystem events.</p>`;
   const config = activePolicy.configuration || {};
   const fields = { policyMaxAttempts: config.maximum_automated_attempts, policyMaxComms: config.maximum_customer_communications, policyEscalation: config.minimum_amount_for_human_escalation, policyGraceHours: config.promise_grace_hours, policyConfidence: config.ai_confidence_threshold };
-  Object.entries(fields).forEach(([id, value]) => { const input = $("#" + id); if (input) input.value = value ?? ""; });
+  Object.entries(fields).forEach(([id, value]) => { const input = $("#" + id); if (input && document.activeElement !== input) input.value = value ?? ""; });
   const canEdit = state.user?.role === "ADMIN";
   $("#policyForm")?.querySelectorAll("input, button").forEach((control) => { control.disabled = !canEdit; });
 }
@@ -801,10 +1143,10 @@ async function navigateNow(viewName) {
     approvals: "Approval Queue",
     customers: "Customer Directory",
     promises: "Promises to Pay",
-    ai: "AI Sandbox & Evaluation",
+    ai: "AI Recovery Copilot",
     audit: "Decision Ledger",
     analytics: "Analytics & Net Recovery ROI",
-    settings: "Policies & System Health",
+    settings: "Controls & Connections",
   }[viewName];
 
   $$("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === viewName));
@@ -842,6 +1184,21 @@ async function navigateNow(viewName) {
 // ==============================================================================
 
 document.body.addEventListener("click", async (e) => {
+  if (e.target.closest("[data-onboarding-close]") || e.target.closest("[data-onboarding-skip]")) {
+    closeOnboarding();
+    return;
+  }
+  if (e.target.closest("[data-onboarding-next]")) {
+    const step = onboardingSteps[onboardingIndex];
+    if (onboardingIndex === onboardingSteps.length - 1) {
+      closeOnboarding();
+      await navigate(step.view);
+    } else {
+      onboardingIndex += 1;
+      renderOnboardingStep();
+    }
+    return;
+  }
   if (e.target.closest("#mobileNavToggle")) {
     const appPanel = $("#appPanel");
     const open = !appPanel.classList.contains("nav-open");
@@ -892,9 +1249,31 @@ document.body.addEventListener("click", async (e) => {
     return;
   }
 
+  // Customer row click for timeline
+  const customerRow = e.target.closest("[data-customer-id]");
+  if (customerRow) {
+    if (e.target.closest("details") || e.target.closest("summary") || e.target.closest("button") || e.target.closest("a")) {
+      return;
+    }
+    const customerId = customerRow.dataset.customerId;
+    if (customerId) {
+      await showCustomerTimeline(customerId);
+      return;
+    }
+  }
+
+  // Close customer timeline
+  if (e.target.id === "closeCustomerTimelineBtn" || e.target.closest("#closeCustomerTimelineBtn")) {
+    $("#customerTimelineDrawer")?.classList.add("hidden");
+    return;
+  }
+
   // Row open case
   const caseRow = e.target.closest("[data-open-case]");
   if (caseRow) {
+    if (e.target.closest("details") || e.target.closest("summary") || e.target.closest("button") || e.target.closest("a")) {
+      return;
+    }
     const caseId = caseRow.dataset.openCase;
     if (state.view !== "queue") {
       state.selectedCaseId = caseId;
@@ -987,12 +1366,31 @@ document.body.addEventListener("submit", async (e) => {
         method: "POST",
         body: { message: msg, provider: provider },
       });
-      resultBox.textContent = JSON.stringify(res, null, 2);
+      let draft = null;
+      try {
+        draft = await api("/api/ai/draft-recovery-message", {
+          method: "POST",
+          body: {
+            provider,
+            context: {
+              customer_name: "Customer",
+              invoice_id: "current invoice",
+              intent: res.intent,
+              language: "en",
+              channel: "EMAIL",
+              opted_out: res.intent === "OPT_OUT",
+            },
+          },
+        });
+      } catch (draftError) {
+        draft = { unavailable: true, error: draftError.message };
+      }
+      resultBox.innerHTML = renderAiOutput({ classification: res, recovery_draft: draft });
       if (telemetryBox) {
         const provider = esc(res.provider_used || "unknown");
         const latency = esc(Number(res.latency_ms) || 0);
         const tokens = esc(res.tokens && res.tokens.total_tokens != null ? res.tokens.total_tokens : "N/A");
-        telemetryBox.innerHTML = `<span style="color:#059669;">● ${provider}</span> | Latency: <b>${latency}ms</b> | Tokens: <b>${tokens}</b>`;
+        telemetryBox.innerHTML = `<span class="telemetry-provider-dot">● ${provider}</span> | Latency: <b>${latency}ms</b> | Tokens: <b>${tokens}</b>`;
       }
     } catch (err) {
       resultBox.textContent = `Error: ${err.message}`;
@@ -1026,31 +1424,116 @@ $("#logoutBtn").onclick = async (e) => {
 
 let livePollingTimer = null;
 let wsAttempts = 0;
+let isRefreshing = false;
+
+async function refreshCurrentView() {
+  if (isRefreshing) return;
+  isRefreshing = true;
+  try {
+    const active = document.activeElement;
+    const isEditing = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
+
+    // Preserve active form element input and focus if user is actively typing
+    let activeInputId = null;
+    let activeInputVal = null;
+    let selStart = null;
+    let selEnd = null;
+    let activeInputSelector = null;
+    if (isEditing) {
+      activeInputId = active.id || null;
+      activeInputVal = active.value;
+      try {
+        selStart = active.selectionStart;
+        selEnd = active.selectionEnd;
+      } catch {}
+      if (!activeInputId && active.getAttribute("data-approval-message")) {
+        activeInputSelector = `[data-approval-message="${active.getAttribute("data-approval-message")}"]`;
+      }
+    }
+
+    const currentView = state.view;
+    switch (currentView) {
+      case "overview":
+        await renderOverview();
+        break;
+      case "queue":
+        state.cases = await api("/api/cases");
+        if (state.applyQueueFilters) {
+          state.applyQueueFilters();
+        } else {
+          await renderQueue();
+        }
+        if (state.selectedCaseId) {
+          await showCaseInspector(state.selectedCaseId);
+        }
+        break;
+      case "approvals":
+        await renderApprovals();
+        break;
+      case "promises":
+        await renderPromises();
+        break;
+      case "customers":
+        await renderCustomers();
+        break;
+      case "ai":
+        if (!isEditing || active.id !== "aiMessageInput") {
+          await renderAI();
+        }
+        break;
+      case "audit":
+        await renderAudit();
+        break;
+      case "analytics":
+        await renderAnalytics();
+        break;
+      case "settings":
+        if (!isEditing) {
+          await renderSettings();
+        }
+        break;
+      default:
+        break;
+    }
+
+    // If Case Inspector is currently open, refresh it without closing it
+    if (state.selectedCaseId && currentView !== "queue") {
+      const drawer = $("#caseDetailDrawer");
+      if (drawer && !drawer.classList.contains("hidden")) {
+        await showCaseInspector(state.selectedCaseId);
+      }
+    }
+
+    // Restore user input and cursor position if replaced during re-render
+    if (isEditing) {
+      const restoredEl = activeInputId ? $(`#${activeInputId}`) : (activeInputSelector ? $(activeInputSelector) : null);
+      if (restoredEl) {
+        restoredEl.value = activeInputVal;
+        restoredEl.focus();
+        try {
+          if (selStart !== null && selEnd !== null) {
+            restoredEl.setSelectionRange(selStart, selEnd);
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.error("refreshCurrentView failed:", err);
+  } finally {
+    isRefreshing = false;
+  }
+}
 
 function startLivePolling() {
   if (livePollingTimer) return;
   $("#systemHealthBadge").className = "status-badge healthy";
-  $("#systemHealthBadge").innerHTML = `<span class="pulse-dot"></span> CLOUD LIVE (ADAPTIVE)`;
+  $("#systemHealthBadge").innerHTML = `<span class="pulse-dot"></span> WORKSPACE LIVE`;
 
   livePollingTimer = setInterval(async () => {
     try {
       // Trigger on-demand task processing tick
       api("/api/scheduler/tick").catch(() => {});
-
-      if (state.view === "overview") {
-        const s = await api("/api/dashboard/summary");
-        state.summary = s;
-        $("#stats").innerHTML =
-          renderMetricCard("Revenue at Risk", money(s.total_at_risk), "Active exposure across queue") +
-          renderMetricCard("Revenue Recovered", money(s.total_recovered), "Verified payment settlements", "highlight-green") +
-          renderMetricCard("Net Recovered Value", money(s.net_recovery_value), `Gross minus ops costs (${money(s.total_intervention_costs)})`, "highlight-blue") +
-          renderMetricCard("Recovery Rate", `${s.recovery_rate}%`, `${s.total_cases} total cases tracked`) +
-          renderMetricCard("Unnecessary Actions Prevented", money(s.unnecessary_interventions_prevented), "Temporary failures resolved safely", "highlight-green") +
-          renderMetricCard("Policy Safe Stops", s.safe_stop_count, "Opt-outs & retry limits enforced");
-      } else if (state.view === "queue") {
-        state.cases = await api("/api/cases");
-        state.applyQueueFilters?.();
-      }
+      await refreshCurrentView();
     } catch {}
   }, 3500);
 }
@@ -1081,13 +1564,7 @@ function connectWebSocket() {
     try {
       const data = JSON.parse(event.data);
       if (data.type === "CASE_UPDATED") {
-        if (state.view === "overview") {
-          renderOverview();
-        } else if (state.view === "queue") {
-          state.cases = await api("/api/cases");
-          state.applyQueueFilters?.();
-          if (state.selectedCaseId) await showCaseInspector(state.selectedCaseId);
-        }
+        await refreshCurrentView();
       }
     } catch {}
   };
@@ -1194,6 +1671,7 @@ async function submitLogin(email, password) {
     const data = await api("/api/auth/login", { method: "POST", body: { email, password } });
     showAppShell(data.user);
     connectWebSocket();
+    await ensureActivePolicy();
     await navigate("overview");
     showRzpToast("Signed in", data.user.email, "success");
   } catch (err) {
@@ -1224,6 +1702,7 @@ async function submitRegister(email, password) {
     const data = await api("/api/auth/register", { method: "POST", body: { email, password } });
     showAppShell(data.user);
     connectWebSocket();
+    await ensureActivePolicy();
     await navigate("overview");
     showRzpToast("Account created", data.user.email, "success");
   } catch (err) {
@@ -1246,6 +1725,7 @@ async function bootApp() {
     const user = await api("/api/auth/me");
     showAppShell(user);
     connectWebSocket();
+    await ensureActivePolicy();
     await navigate("overview");
   } catch {
     showAuthShell();

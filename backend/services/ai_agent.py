@@ -87,6 +87,130 @@ class CustomerIntent(BaseModel):
         return hasattr(self, item)
 
 
+class RecoveryDraft(BaseModel):
+    """A reviewable message proposal. It never sends or mutates payment state."""
+
+    message: str = Field(min_length=1, max_length=640)
+    objective: str = Field(min_length=1, max_length=120)
+    tone: str = Field(default="helpful", max_length=32)
+    channel: str = Field(default="EMAIL", max_length=32)
+    language: str = Field(default="en", max_length=16)
+    confidence: float = Field(ge=0.0, le=1.0)
+    risk_flags: list[str] = Field(default_factory=list)
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def sanitize_message(cls, value: Any) -> str:
+        return " ".join(str(value or "").split())[:640]
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def sanitize_draft_confidence(cls, value: Any) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except Exception:
+            return 0.5
+
+
+def _draft_fallback(context: dict[str, Any]) -> RecoveryDraft:
+    """Produce a safe baseline when providers are unavailable or return invalid JSON."""
+    language = str(context.get("language") or "en").lower()
+    name = str(context.get("customer_name") or "there").strip()[:80]
+    amount = context.get("amount")
+    invoice = str(context.get("invoice_id") or "your invoice").strip()[:80]
+    intent = str(context.get("intent") or "").upper()
+    if intent in {"DISPUTE", "OPT_OUT"} or context.get("opted_out"):
+        return RecoveryDraft(
+            message="We have paused payment reminders while your request is reviewed.",
+            objective="Honor suppression or dispute handling",
+            tone="respectful",
+            channel="NONE",
+            language="en",
+            confidence=0.99,
+            risk_flags=["NO_CONTACT_RECOMMENDED"],
+        )
+    if language in {"hi", "hinglish"}:
+        message = f"Namaste {name}, aapke {invoice} ka payment update pending hai. Kripya secure payment link se check karein. Agar payment ho chuka hai, receipt share karein aur hum verify kar denge."
+    elif amount:
+        message = f"Hi {name}, your payment of {amount} for {invoice} is still pending. Please use the secure payment link when convenient. If you have already paid, reply with your receipt and we will verify it."
+    else:
+        message = f"Hi {name}, your payment for {invoice} is still pending. Please use the secure payment link when convenient. If you have already paid, reply with your receipt and we will verify it."
+    return RecoveryDraft(
+        message=message,
+        objective="Resolve the pending payment without pressure",
+        tone="helpful",
+        channel=str(context.get("channel") or "EMAIL").upper(),
+        language=language,
+        confidence=0.72,
+        risk_flags=["REVIEW_BEFORE_SEND"],
+    )
+
+
+def _draft_prompt(context: dict[str, Any]) -> str:
+    safe_context = {
+        "customer_name": str(context.get("customer_name") or "there")[:80],
+        "amount": context.get("amount"),
+        "currency": str(context.get("currency") or "INR")[:8],
+        "invoice_id": str(context.get("invoice_id") or "")[:80],
+        "plan": str(context.get("plan") or "")[:80],
+        "payment_method": str(context.get("payment_method") or "")[:40],
+        "intent": str(context.get("intent") or "UNKNOWN")[:40],
+        "language": str(context.get("language") or "en")[:16],
+        "channel": str(context.get("channel") or "EMAIL")[:32],
+        "opted_out": bool(context.get("opted_out")),
+    }
+    return (
+        "Create one concise, respectful payment-recovery draft from the JSON context below. "
+        "Return ONLY JSON with keys message, objective, tone, channel, language, confidence, risk_flags. "
+        "Do not claim a payment succeeded, invent a due date, expose secrets, threaten the customer, "
+        "or include a payment URL. If opted_out is true or intent is DISPUTE, set channel to NONE and "
+        "message to a neutral acknowledgement that contact is paused. Keep message under 480 characters.\n"
+        + json.dumps(safe_context, ensure_ascii=True)
+    )
+
+
+async def _provider_draft(provider: str, context: dict[str, Any]) -> tuple[RecoveryDraft, str, float]:
+    start_time = time.time()
+    prompt = _draft_prompt(context)
+    schema_hint = '{"message":"...","objective":"...","tone":"helpful","channel":"EMAIL","language":"en","confidence":0.8,"risk_flags":["REVIEW_BEFORE_SEND"]}'
+    if provider == "groq-llm":
+        if not GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY is not configured")
+        payload = {"model": GROQ_MODEL, "messages": [{"role": "system", "content": "You are a cautious subscription revenue-recovery copywriter. Return only valid JSON matching this schema: " + schema_hint}, {"role": "user", "content": prompt}], "temperature": 0.2, "response_format": {"type": "json_object"}}
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        url = "https://api.groq.com/openai/v1/chat/completions"
+    else:
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY is not configured")
+        payload = {"contents": [{"parts": [{"text": "You are a cautious subscription revenue-recovery copywriter. Return only valid JSON matching this schema: " + schema_hint + "\n" + prompt}]}], "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
+        headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    async with httpx.AsyncClient(timeout=12) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        raw = data["choices"][0]["message"]["content"] if provider == "groq-llm" else data["candidates"][0]["content"]["parts"][0]["text"]
+        raw = raw.strip().removeprefix("``json").removeprefix("``").removesuffix("``").strip()
+        draft = RecoveryDraft.model_validate(json.loads(raw))
+    return draft, provider, round((time.time() - start_time) * 1000, 2)
+
+
+async def draft_recovery_message(context: dict[str, Any], force_provider: Optional[str] = None) -> tuple[RecoveryDraft, str, float]:
+    """Use Groq -> Gemini -> deterministic copy without any outbound side effect."""
+    provider = (force_provider or "auto").lower().strip()
+    if provider in {"fallback", "fallback-rules", "rules"}:
+        start = time.time()
+        return _draft_fallback(context), "fallback-rules", round((time.time() - start) * 1000, 2)
+    providers = ["groq-llm", "gemini-llm"] if provider in {"", "auto"} else ["groq-llm" if provider == "groq" else "gemini-llm"]
+    for candidate in providers:
+        try:
+            return await _provider_draft(candidate, context)
+        except Exception:
+            continue
+    start = time.time()
+    return _draft_fallback(context), "fallback-rules", round((time.time() - start) * 1000, 2)
+
+
 def resolve_temporal_expression(expression: str, base_time: Optional[datetime] = None) -> datetime:
     """
     Deterministically resolves natural language temporal expressions (Hinglish/English)
@@ -306,11 +430,15 @@ async def groq_intent(message: str) -> tuple[CustomerIntent, str, float]:
         "Never invent dates. If intent is PROMISE_TO_PAY, recommended_next_action MUST be WAIT."
     )
 
+    # Sanitize user message against prompt injection
+    safe_message = str(message or "").replace("```", "").replace("<sys>", "").replace("</sys>", "")[:1000]
+    user_payload_text = f"Analyze the following customer message:\n<customer_message>\n{safe_message}\n</customer_message>"
+
     payload = {
         "model": GROQ_MODEL,
         "messages": [
             {"role": "system", "content": prompt_system},
-            {"role": "user", "content": message},
+            {"role": "user", "content": user_payload_text},
         ],
         "temperature": 0.0,
         "response_format": {"type": "json_object"},

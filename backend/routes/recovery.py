@@ -5,11 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, joinedload
 
-from backend.core.security import get_current_user
+from backend.core.security import decrypt_secret, encrypt_secret, get_current_user
 from backend.core.tenancy import merchant_id_for_user, tenant_filter
 from backend.services.razorpay_provider import RazorpayProvider
 from backend.services.recommendations import approve_recommendation, create_recommendation, recommendation_context
 from backend.services.policy_engine import mark_recovered
+from backend.services.websocket_manager import broadcast
 from database.connection import get_db
 from database.models import AIRecommendation, ApprovalRequest, ApprovalStatus, CaseEvent, Customer, ExperimentAssignment, IntegrationCredential, Merchant, PaymentEvent, ProviderVerification, RecoveryCase, RecoveryOutcome, User, now_utc
 
@@ -115,6 +116,8 @@ def _approval_action(approval_id: int, action: str, payload: dict[str, Any], db:
         approval.reason = payload.get("reason") or f"{action.title()}d by operator"
         approval.decided_at = now_utc()
         db.commit()
+        if approval.case:
+            broadcast({"type": "CASE_UPDATED", "case_id": approval.case.case_id, "state": approval.case.state})
         return {"approval_id": approval.id, "status": approval.status}
     except (PermissionError, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -147,7 +150,17 @@ def verify_payment(case_id: str, payload: dict[str, Any] = {}, db: Session = Dep
         verification_type = "invoice"
     if not reference:
         raise HTTPException(400, "No provider payment or invoice reference is available")
-    result = RazorpayProvider().verify_invoice(reference) if verification_type == "invoice" else RazorpayProvider().verify_payment(reference)
+
+    credential = db.scalar(
+        select(IntegrationCredential)
+        .where(IntegrationCredential.merchant_id == case.merchant_id, IntegrationCredential.provider == "razorpay")
+        .order_by(desc(IntegrationCredential.id))
+    )
+    key_id = credential.key_id if credential else None
+    key_secret = decrypt_secret(credential.secret_ref) if (credential and credential.secret_ref) else None
+    provider = RazorpayProvider(key_id=key_id, key_secret=key_secret)
+
+    result = provider.verify_invoice(reference) if verification_type == "invoice" else provider.verify_payment(reference)
     evidence = ProviderVerification(
         merchant_id=case.merchant_id,
         case_id_ref=case.id,
@@ -170,6 +183,7 @@ def verify_payment(case_id: str, payload: dict[str, Any] = {}, db: Session = Dep
             latest_outcome.recovered_amount = case.recovered_amount
             latest_outcome.executed_action = "PROVIDER_VERIFIED_CAPTURE"
     db.commit()
+    broadcast({"type": "CASE_UPDATED", "case_id": case.case_id, "state": case.state})
     return {"status": result.status, "request_id": result.request_id, "response_status": result.response_status, "evidence": result.evidence, "error": result.error_message}
 
 
@@ -177,8 +191,16 @@ def verify_payment(case_id: str, payload: dict[str, Any] = {}, db: Session = Dep
 def razorpay_health(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     merchant_id = merchant_id_for_user(db, user)
     credential = db.scalar(select(IntegrationCredential).where(IntegrationCredential.merchant_id == merchant_id, IntegrationCredential.provider == "razorpay").order_by(desc(IntegrationCredential.id)))
-    result = RazorpayProvider().health()
-    result.update({"connection_status": credential.status if credential else "NOT_CONNECTED", "environment": credential.environment if credential else "test", "last_checked_at": credential.last_checked_at.isoformat() if credential and credential.last_checked_at else None})
+    key_id = credential.key_id if credential else None
+    key_secret = decrypt_secret(credential.secret_ref) if (credential and credential.secret_ref) else None
+    provider = RazorpayProvider(key_id=key_id, key_secret=key_secret)
+    result = provider.health()
+    result.update({
+        "connection_status": credential.status if credential else "NOT_CONNECTED",
+        "environment": credential.environment if credential else "test",
+        "key_id": (credential.key_id[:8] + "...") if (credential and credential.key_id) else None,
+        "last_checked_at": credential.last_checked_at.isoformat() if credential and credential.last_checked_at else None,
+    })
     return result
 
 
@@ -195,17 +217,43 @@ def connect_razorpay(payload: dict[str, Any], db: Session = Depends(get_db), use
     webhook_secret = str(payload.get("webhook_secret") or "").strip()
     if not api_key or not api_secret:
         raise HTTPException(400, "key_id and key_secret are required")
-    credential = IntegrationCredential(
-        merchant_id=merchant_id,
-        provider="razorpay",
-        environment=str(payload.get("environment", "test")).lower(),
-        key_id=api_key,
-        secret_ref=sha256(api_secret.encode()).hexdigest(),
-        webhook_secret_ref=sha256(webhook_secret.encode()).hexdigest() if webhook_secret else None,
-        status="CONFIGURED",
-        extra_data={"connected_by": user.email},
+
+    encrypted_secret = encrypt_secret(api_secret)
+    encrypted_webhook = encrypt_secret(webhook_secret) if webhook_secret else None
+    api_key_hash = sha256(api_key.encode()).hexdigest()
+
+    test_provider = RazorpayProvider(key_id=api_key, key_secret=api_secret)
+    health_check = test_provider.health()
+    conn_status = "CONNECTED" if health_check.get("status") in {"CONNECTED", "STANDBY"} else "CONFIGURED"
+
+    credential = db.scalar(
+        select(IntegrationCredential)
+        .where(IntegrationCredential.merchant_id == merchant_id, IntegrationCredential.provider == "razorpay")
+        .order_by(desc(IntegrationCredential.id))
     )
-    db.add(credential)
+    if credential:
+        credential.key_id = api_key
+        credential.secret_ref = encrypted_secret
+        credential.webhook_secret_ref = encrypted_webhook
+        credential.api_key_hash = api_key_hash
+        credential.environment = str(payload.get("environment", "test")).lower()
+        credential.status = conn_status
+        credential.last_checked_at = now_utc()
+        credential.extra_data = {"connected_by": user.email, "health": health_check}
+    else:
+        credential = IntegrationCredential(
+            merchant_id=merchant_id,
+            provider="razorpay",
+            environment=str(payload.get("environment", "test")).lower(),
+            key_id=api_key,
+            secret_ref=encrypted_secret,
+            webhook_secret_ref=encrypted_webhook,
+            api_key_hash=api_key_hash,
+            status=conn_status,
+            last_checked_at=now_utc(),
+            extra_data={"connected_by": user.email, "health": health_check},
+        )
+        db.add(credential)
     db.commit()
     return {"ok": True, "provider": credential.provider, "environment": credential.environment, "status": credential.status, "credential_id": credential.id}
 
@@ -241,7 +289,24 @@ def recovery_lift(db: Session = Depends(get_db), user: User = Depends(get_curren
         return round(sum(1 for item in items if item.payment_outcome == "RECOVERED") / len(items) * 100, 2) if items else 0.0
     treatment_rate = rate(treatment)
     holdout_rate = rate(holdout)
-    return {"treatment": {"cases": len(treatment), "recovery_rate": treatment_rate, "recovered_amount": sum(item.recovered_amount for item in treatment)}, "holdout": {"cases": len(holdout), "recovery_rate": holdout_rate, "recovered_amount": sum(item.recovered_amount for item in holdout)}, "incremental_lift_points": round(treatment_rate - holdout_rate, 2)}
+    return {
+        "treatment": {
+            "cases": len(treatment),
+            "recovery_rate": treatment_rate,
+            "recovered_amount": sum(item.recovered_amount for item in treatment),
+        },
+        "holdout": {
+            "cases": len(holdout),
+            "recovery_rate": holdout_rate,
+            "recovered_amount": sum(item.recovered_amount for item in holdout),
+        },
+        "treatment_rate": treatment_rate,
+        "holdout_rate": holdout_rate,
+        "treatment_recovery_rate": treatment_rate,
+        "holdout_recovery_rate": holdout_rate,
+        "incremental_lift_points": round(treatment_rate - holdout_rate, 2),
+        "sample_size": len(outcomes),
+    }
 
 
 @router.get("/analytics/channel-performance")

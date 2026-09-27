@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from backend.services.ai_agent import analyze_intent_resilient, resolve_temporal_expression
 from backend.services.policy_engine import _execute_coro_sync, latest_policy, record_action, to_case_dict
 from backend.services.strategy_scorer import calculate_strategy_scores
+from backend.services.websocket_manager import broadcast
 from database.models import (
     AIRecommendation, ApprovalRequest, ApprovalStatus, CaseEvent, CaseState,
-    Notification, RecoveryCase, RecommendationStatus, Role, User, now_utc,
+    ExperimentAssignment, Notification, RecoveryCase, RecommendationStatus, Role, User, now_utc,
 )
 
 
@@ -106,6 +107,25 @@ def create_recommendation(
 
     recommended_at = resolve_temporal_expression(temporal) if temporal and action == "WAIT" else None
     score_data = scores.get(action, {})
+
+    # Incorporate A/B experiment assignment variant if present
+    experiment = db.scalar(
+        select(ExperimentAssignment)
+        .where(
+            ExperimentAssignment.merchant_id == case.merchant_id,
+            (ExperimentAssignment.case_id_ref == case.id) | (ExperimentAssignment.customer_id_ref == case.customer_id_ref)
+        )
+        .order_by(desc(ExperimentAssignment.id))
+    )
+    message_objective = "Resolve payment safely without repeat contact" if action != "STOP" else "Honor customer suppression request"
+    if experiment and experiment.variant:
+        if "urgency" in experiment.variant.lower():
+            message_objective = "Urgent: Prompt customer to complete payment before service interruption"
+            tone = "urgent"
+        elif "empathy" in experiment.variant.lower() or "v2" in experiment.variant.lower():
+            message_objective = "Supportive: Provide flexible options and help customer resolve issue smoothly"
+            tone = "empathetic"
+
     recommendation = AIRecommendation(
         merchant_id=case.merchant_id,
         case_id_ref=case.id,
@@ -115,7 +135,7 @@ def create_recommendation(
         recommended_action=action,
         recommended_channel="RECOVERY_LINK" if action == "RECOVER" else None,
         recommended_at=recommended_at,
-        message_objective="Resolve payment safely without repeat contact" if action != "STOP" else "Honor customer suppression request",
+        message_objective=message_objective,
         tone=tone,
         reason_codes=reasons or ["strategy_score_maximizes_net_recovery"],
         approval_level=approval_level,
@@ -123,8 +143,17 @@ def create_recommendation(
         disturbance_cost=int(score_data.get("disturbance", 0)),
         policy_version=policy_row.version,
         provider=provider,
-        model_metadata={"latency_ms": locals().get("latency", 0), "scored_action": scored_action},
-        input_context={"message": message, **recommendation_context(db, case)},
+        model_metadata={
+            "latency_ms": locals().get("latency", 0),
+            "scored_action": scored_action,
+            "experiment_key": experiment.experiment_key if experiment else None,
+            "experiment_variant": experiment.variant if experiment else None,
+        },
+        input_context={
+            "message": message,
+            "experiment_variant": experiment.variant if experiment else None,
+            **recommendation_context(db, case),
+        },
     )
     db.add(recommendation)
     db.flush()
@@ -137,6 +166,7 @@ def create_recommendation(
     )
     db.add(approval)
     db.commit()
+    broadcast({"type": "CASE_UPDATED", "case_id": case.case_id, "state": case.state})
     db.refresh(recommendation)
     db.refresh(approval)
     return recommendation, approval
@@ -200,4 +230,5 @@ def approve_recommendation(db: Session, approval: ApprovalRequest, actor: User, 
     ))
     db.add(CaseEvent(case=case, event_type="APPROVAL_GRANTED", message=f"{actor.email} approved {action}", details={"approval_id": approval.id}))
     db.commit()
+    broadcast({"type": "CASE_UPDATED", "case_id": case.case_id, "state": case.state})
     return {"approval_id": approval.id, "status": approval.status, "case": to_case_dict(case)}

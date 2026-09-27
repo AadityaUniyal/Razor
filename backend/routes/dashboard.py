@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.core.config import GROQ_API_KEY, GEMINI_API_KEY, IS_VERCEL
 from backend.core.security import get_current_user
+from backend.core.tenancy import merchant_id_for_user, tenant_filter
 from backend.services.policy_engine import latest_policy
 from backend.services.websocket_manager import app_websockets
 from database.connection import get_db, check_db_health
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/api", tags=["dashboard"])
 @router.get("/summary")
 @router.get("/dashboard/summary")
 def dashboard_summary(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    merchant_id = merchant_id_for_user(db, user)
     totals = db.execute(select(
         func.count(RecoveryCase.id),
         func.coalesce(func.sum(RecoveryCase.recovered_amount), 0),
@@ -36,10 +38,11 @@ def dashboard_summary(db: Session = Depends(get_db), user: User = Depends(get_cu
             (RecoveryCase.communication_count == 0),
             RecoveryCase.amount,
         ), else_=0)), 0),
-    )).one()
+    ).where(tenant_filter(RecoveryCase, merchant_id))).one()
     total_cases, total_recovered, total_at_risk, total_seen, total_intervention_costs, recovered_count, safe_stop_count, escalation_count, prevented = totals
     net_recovery_value = total_recovered - total_intervention_costs
     recovery_time_rows = db.execute(select(RecoveryCase.closed_at, RecoveryCase.created_at).where(
+        tenant_filter(RecoveryCase, merchant_id),
         RecoveryCase.recovered.is_(True), RecoveryCase.closed_at.is_not(None)
     )).all()
     recovery_times = [(closed_at - created_at).total_seconds() for closed_at, created_at in recovery_time_rows]
@@ -57,14 +60,22 @@ def dashboard_summary(db: Session = Depends(get_db), user: User = Depends(get_cu
         "safe_stop_count": int(safe_stop_count or 0),
         "escalation_count": int(escalation_count or 0),
         "average_recovery_time_seconds": float(avg_time or 0),
-        "active_promises": db.scalar(select(func.count(PaymentPromise.id)).where(PaymentPromise.status == "PENDING")) or 0,
+        "active_promises": db.scalar(select(func.count(PaymentPromise.id)).join(RecoveryCase, PaymentPromise.case_id_ref == RecoveryCase.id).where(PaymentPromise.status == "PENDING", tenant_filter(RecoveryCase, merchant_id))) or 0,
         "ai_fallback_events": db.scalar(select(func.count(SystemHealthEvent.id)).where(SystemHealthEvent.service_name == "groq", SystemHealthEvent.status.like("FALLBACK%"))) or 0,
     }
 
 
 @router.get("/dashboard/activity")
 def dashboard_activity(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    events = db.scalars(select(CaseEvent).options(joinedload(CaseEvent.case)).order_by(desc(CaseEvent.id)).limit(30)).all()
+    merchant_id = merchant_id_for_user(db, user)
+    events = db.scalars(
+        select(CaseEvent)
+        .join(RecoveryCase, CaseEvent.case_id_ref == RecoveryCase.id)
+        .options(joinedload(CaseEvent.case))
+        .where(tenant_filter(RecoveryCase, merchant_id))
+        .order_by(desc(CaseEvent.id))
+        .limit(30)
+    ).all()
     return [{
         "case_id": e.case.case_id,
         "event_type": e.event_type,
@@ -75,13 +86,14 @@ def dashboard_activity(db: Session = Depends(get_db), user: User = Depends(get_c
 
 @router.get("/dashboard/metrics")
 def dashboard_metrics(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    merchant_id = merchant_id_for_user(db, user)
     categories: dict[str, dict[str, int]] = defaultdict(lambda: {"at_risk": 0, "recovered": 0, "count": 0})
     category_rows = db.execute(select(
         RecoveryCase.failure_category,
         func.count(RecoveryCase.id),
         func.coalesce(func.sum(RecoveryCase.recovered_amount), 0),
         func.coalesce(func.sum(sql_case((RecoveryCase.recovered.is_(False), RecoveryCase.amount), else_=0)), 0),
-    ).group_by(RecoveryCase.failure_category)).all()
+    ).where(tenant_filter(RecoveryCase, merchant_id)).group_by(RecoveryCase.failure_category)).all()
     for category, count, recovered, at_risk in category_rows:
         categories[category] = {"count": int(count or 0), "recovered": int(recovered or 0), "at_risk": int(at_risk or 0)}
 
@@ -91,7 +103,7 @@ def dashboard_metrics(db: Session = Depends(get_db), user: User = Depends(get_cu
         func.coalesce(func.sum(sql_case((RecoveryCase.state == CaseState.ESCALATED.value, 1), else_=0)), 0),
         func.coalesce(func.sum(sql_case((RecoveryCase.state == CaseState.VERIFY.value, 1), else_=0)), 0),
         func.coalesce(func.sum(sql_case((RecoveryCase.state == CaseState.WAIT.value, 1), else_=0)), 0),
-    )).one()
+    ).where(tenant_filter(RecoveryCase, merchant_id))).one()
 
     return {
         "by_category": categories,
@@ -106,6 +118,7 @@ def dashboard_metrics(db: Session = Depends(get_db), user: User = Depends(get_cu
 @router.get("/dashboard/trends")
 def dashboard_trends(days: int = 14, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Return a compact daily recovery series for the merchant dashboard."""
+    merchant_id = merchant_id_for_user(db, user)
     days = max(7, min(days, 31))
     from datetime import datetime, timedelta, timezone
 
@@ -115,7 +128,10 @@ def dashboard_trends(days: int = 14, db: Session = Depends(get_db), user: User =
     cases = db.execute(select(
         RecoveryCase.recovered, RecoveryCase.recovered_amount, RecoveryCase.amount,
         RecoveryCase.closed_at, RecoveryCase.created_at,
-    ).where(RecoveryCase.created_at >= window_start)).all()
+    ).where(
+        tenant_filter(RecoveryCase, merchant_id),
+        RecoveryCase.created_at >= window_start,
+    )).all()
     series = []
     for offset in range(days - 1, -1, -1):
         day = end - timedelta(days=offset)
@@ -138,9 +154,12 @@ def dashboard_trends(days: int = 14, db: Session = Depends(get_db), user: User =
 
 @router.get("/dashboard/notifications")
 def dashboard_notifications(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    merchant_id = merchant_id_for_user(db, user)
     notifications = db.scalars(
         select(Notification)
+        .join(RecoveryCase, Notification.case_id_ref == RecoveryCase.id)
         .options(joinedload(Notification.case))
+        .where(tenant_filter(RecoveryCase, merchant_id))
         .order_by(desc(Notification.id))
         .limit(30)
     ).all()
@@ -157,18 +176,25 @@ def dashboard_notifications(db: Session = Depends(get_db), user: User = Depends(
 
 @router.get("/customers")
 def list_customers(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    merchant_id = merchant_id_for_user(db, user)
     customers = db.scalars(
         select(Customer)
         .options(joinedload(Customer.cases))
+        .where(tenant_filter(Customer, merchant_id))
         .order_by(desc(Customer.id))
         .limit(250)
     ).unique().all()
-    cases = db.scalars(select(RecoveryCase).order_by(desc(RecoveryCase.id))).all()
+    cases = db.scalars(
+        select(RecoveryCase)
+        .where(tenant_filter(RecoveryCase, merchant_id))
+        .order_by(desc(RecoveryCase.id))
+    ).all()
     profiles: dict[str, dict[str, Any]] = {}
 
     for customer in customers:
         key = customer.email.strip().lower()
-        customer_cases = sorted(customer.cases, key=lambda case: case.id, reverse=True)
+        customer_cases = [c for c in customer.cases if c.merchant_id == merchant_id or c.merchant_id is None]
+        customer_cases = sorted(customer_cases, key=lambda case: case.id, reverse=True)
         profiles[key] = {
             "id": customer.id,
             "external_customer_id": customer.external_customer_id,
@@ -218,7 +244,14 @@ def list_customers(db: Session = Depends(get_db), user: User = Depends(get_curre
 
 @router.get("/promises")
 def list_promises(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    promises = db.scalars(select(PaymentPromise).options(joinedload(PaymentPromise.case)).order_by(PaymentPromise.promised_at)).all()
+    merchant_id = merchant_id_for_user(db, user)
+    promises = db.scalars(
+        select(PaymentPromise)
+        .join(RecoveryCase, PaymentPromise.case_id_ref == RecoveryCase.id)
+        .options(joinedload(PaymentPromise.case))
+        .where(tenant_filter(RecoveryCase, merchant_id))
+        .order_by(PaymentPromise.promised_at)
+    ).all()
     out = []
     for p in promises:
         case = p.case
@@ -239,9 +272,15 @@ def list_promises(db: Session = Depends(get_db), user: User = Depends(get_curren
 
 @router.get("/audit")
 def list_audit(case_id: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    query = select(DecisionLedger).order_by(desc(DecisionLedger.id))
+    merchant_id = merchant_id_for_user(db, user)
+    query = (
+        select(DecisionLedger)
+        .join(RecoveryCase, DecisionLedger.case_id_ref == RecoveryCase.id)
+        .where(tenant_filter(RecoveryCase, merchant_id))
+        .order_by(desc(DecisionLedger.id))
+    )
     if case_id:
-        c = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id))
+        c = db.scalar(select(RecoveryCase).where(RecoveryCase.case_id == case_id, tenant_filter(RecoveryCase, merchant_id)))
         if not c:
             raise HTTPException(404, "Case not found")
         query = query.where(DecisionLedger.case_id_ref == c.id)
@@ -297,7 +336,12 @@ def system_health(db: Session = Depends(get_db), user: User = Depends(get_curren
 
 @router.get("/policies")
 def list_policies(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    policies = db.scalars(select(RecoveryPolicy).order_by(desc(RecoveryPolicy.id))).all()
+    merchant_id = merchant_id_for_user(db, user)
+    policies = db.scalars(
+        select(RecoveryPolicy)
+        .where(tenant_filter(RecoveryPolicy, merchant_id))
+        .order_by(desc(RecoveryPolicy.id))
+    ).all()
     return [{
         "id": p.id,
         "version": p.version,
@@ -312,13 +356,19 @@ def list_policies(db: Session = Depends(get_db), user: User = Depends(get_curren
 def update_policy(payload: dict[str, Any], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if user.role != Role.ADMIN.value:
         raise HTTPException(403, "Admin privileges required")
-    current = latest_policy(db)
-    current.active = False
+    merchant_id = merchant_id_for_user(db, user)
+    current = latest_policy(db, merchant_id)
+    active_policies = db.scalars(
+        select(RecoveryPolicy).where(RecoveryPolicy.merchant_id == merchant_id, RecoveryPolicy.active.is_(True))
+    ).all()
+    for pol in active_policies:
+        pol.active = False
     new_version = f"v{int(time.time())}"
     new_policy = RecoveryPolicy(
+        merchant_id=merchant_id,
         version=new_version,
         name=f"Custom Recovery Policy {new_version}",
-        configuration=payload.get("configuration", current.configuration),
+        configuration=payload.get("configuration", current.configuration if current else {}),
         active=True
     )
     db.add(new_policy)

@@ -59,11 +59,13 @@ default_rate_limiter = SlidingWindowRateLimiter(enabled=RATE_LIMIT_ENABLED)
 
 
 def get_client_identifier(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
-        if client_ip:
-            return client_ip
+    trust_proxy = os.getenv("TRUST_PROXY", "true").lower() in ("true", "1", "yes")
+    if trust_proxy or (request.client and request.client.host in ("testclient", "127.0.0.1", "localhost")):
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+            if client_ip:
+                return client_ip
     if request.client and request.client.host:
         return request.client.host
     return "127.0.0.1"

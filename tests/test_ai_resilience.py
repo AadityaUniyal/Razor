@@ -13,6 +13,7 @@ Verifies:
 10. AI API routes (/api/ai/classify, /api/ai/sandbox, /api/ai/test-intent) with provider override, tokens, prompt details.
 """
 import calendar
+import asyncio
 import json
 import pytest
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,7 @@ from backend.core.config import GEMINI_API_KEY, GEMINI_MODEL, GROQ_API_KEY, GROQ
 from backend.services.ai_agent import (
     CustomerIntent,
     analyze_intent_resilient,
+    draft_recovery_message,
     fallback_ai,
     gemini_intent,
     groq_intent,
@@ -32,6 +34,30 @@ from backend.services.policy_engine import process_case, record_ai_evaluation
 from database.connection import SessionLocal
 from database.models import CaseState, RecoveryCase, DecisionLedger, AIEvaluationRecord, now_utc
 from backend.main import app
+
+
+def test_recovery_draft_fallback_is_safe_and_never_dispatches():
+    draft, provider, _ = asyncio.run(draft_recovery_message({
+        "customer_name": "Asha",
+        "invoice_id": "INV-42",
+        "amount": "INR 999",
+        "intent": "NEED_HELP",
+        "language": "en",
+    }, force_provider="fallback"))
+    assert provider == "fallback-rules"
+    assert "Asha" in draft.message
+    assert draft.channel == "EMAIL"
+
+
+def test_recovery_draft_suppresses_opt_out_contact():
+    draft, provider, _ = asyncio.run(draft_recovery_message({
+        "customer_name": "Asha",
+        "intent": "OPT_OUT",
+        "opted_out": True,
+    }, force_provider="fallback"))
+    assert provider == "fallback-rules"
+    assert draft.channel == "NONE"
+    assert "NO_CONTACT_RECOMMENDED" in draft.risk_flags
 
 
 # ---------------------------------------------------------------------------

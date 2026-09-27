@@ -8,3 +8,4 @@ itsdangerous==2.2.0
 httpx==0.28.1
 python-dotenv>=1.0.0
 pyjwt>=2.8.0
+cryptography>=42.0.0

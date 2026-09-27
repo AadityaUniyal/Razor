@@ -17,7 +17,37 @@ from database.models import User
 
 logger = logging.getLogger("razorrescue.security")
 
+import base64
+from cryptography.fernet import Fernet, InvalidToken
+
 serializer = URLSafeTimedSerializer(SECRET_KEY)
+
+def _get_fernet() -> Fernet:
+    key_bytes = sha256(SECRET_KEY.encode("utf-8")).digest()
+    return Fernet(base64.urlsafe_b64encode(key_bytes))
+
+def encrypt_secret(plaintext: str) -> str:
+    """Encrypts sensitive plaintext credentials (e.g. gateway API secrets) using authenticated Fernet encryption."""
+    if not plaintext:
+        return ""
+    try:
+        f = _get_fernet()
+        return f.encrypt(plaintext.encode("utf-8")).decode("utf-8")
+    except Exception as exc:
+        logger.error("Failed to encrypt secret: %s", exc)
+        return plaintext
+
+def decrypt_secret(ciphertext: Optional[str]) -> Optional[str]:
+    """Decrypts Fernet ciphertext to plaintext. Falls back to original string if not encrypted or invalid."""
+    if ciphertext is None:
+        return None
+    if not ciphertext:
+        return ""
+    try:
+        f = _get_fernet()
+        return f.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+    except (InvalidToken, Exception):
+        return ciphertext
 
 CLERK_PLACEHOLDER_HASHES = frozenset({
     "clerk_authenticated",
@@ -216,3 +246,11 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
             pass
 
     raise HTTPException(status_code=401, detail="Not signed in")
+
+
+def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> Optional[User]:
+    """Resolves authenticated User from header or cookie; returns None if unauthenticated without raising 401."""
+    try:
+        return get_current_user(request, db)
+    except HTTPException:
+        return None

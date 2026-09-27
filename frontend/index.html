@@ -4,8 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RazorRescue | Revenue Recovery Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css?v=4">
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://clerk.dev https://*.clerk.accounts.dev; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https: wss:;">
   <!-- Clerk Frontend SDK -->
   
 </head>
@@ -155,7 +159,7 @@
         </button>
         <button data-view="ai">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 10.5"/></svg>
-          AI Sandbox & Benchmarks
+          AI Recovery Copilot
         </button>
         <button data-view="audit">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
@@ -168,14 +172,14 @@
         </button>
         <button data-view="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          Policy & Health
+          Controls & Connections
         </button>
       </nav>
 
       <div class="sidebar-footer">
         <div class="env-pill">
           <span class="pulse-dot"></span>
-          LIVE PRODUCTION
+          WORKSPACE LIVE
         </div>
       </div>
     </aside>
@@ -205,10 +209,14 @@
           </div>
           <span class="status-badge healthy" id="systemHealthBadge">
             <span class="pulse-dot"></span>
-            ALL SYSTEMS OPERATIONAL
+            RECOVERY WORKSPACE READY
           </span>
 
           <span id="userEmail" style="font-size:13px; font-weight:600; color:var(--text-muted);"></span>
+          <a href="/api/cases/export/csv" class="btn-secondary" title="Export cases as CSV" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export CSV
+          </a>
           <a href="/api/auth/logout" id="logoutBtn" class="btn-secondary">Sign Out</a>
         </div>
       </header>
@@ -221,6 +229,18 @@
     </main>
   </div>
   <div class="mobile-nav-backdrop hidden" id="mobileNavBackdrop"></div>
+  <div id="onboardingModal" class="onboarding-modal hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+    <div class="onboarding-backdrop" data-onboarding-close></div>
+    <section class="onboarding-card">
+      <button class="onboarding-close" type="button" aria-label="Skip setup guide" data-onboarding-close>×</button>
+      <div class="onboarding-progress"><span id="onboardingStepLabel">STEP 1 OF 3</span><div><i id="onboardingProgress"></i></div></div>
+      <span class="eyebrow">YOUR RECOVERY STARTER GUIDE</span>
+      <h2 id="onboardingTitle">Turn payment failures into recoverable revenue.</h2>
+      <p id="onboardingCopy">Connect your payment workspace first. We will verify payment state before recommending any customer contact.</p>
+      <div id="onboardingVisual" class="onboarding-visual"></div>
+      <div class="onboarding-actions"><button class="btn-secondary" type="button" data-onboarding-skip>Skip guide</button><button class="btn-primary" type="button" data-onboarding-next>Next step</button></div>
+    </section>
+  </div>
 
   <!-- ========================================================================
        TEMPLATES
@@ -262,7 +282,7 @@
       <article class="panel">
         <div class="panel-header">
           <h3>Live Recovery Feed</h3>
-          <span class="badge recovered">WebSocket Active</span>
+          <span class="badge recovered">Latest activity</span>
         </div>
         <div id="activity" class="activity-feed" style="max-height: 280px; overflow-y: auto;"></div>
       </article>
@@ -373,19 +393,20 @@
           <div>
             <!-- Manual Operator Controls -->
             <div class="panel">
-              <h4 style="font-size: 13px; margin-bottom: 8px;">Operator Bounded Overrides</h4>
-              <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              <h4 class="panel-subheading">Operator Bounded Overrides</h4>
+              <div class="btn-wrap-gap">
+                <button class="btn-secondary" id="btnActionRecommend">✨ Generate AI Recommendation</button>
                 <button class="btn-secondary" id="btnActionVerify">Verify Gateway</button>
                 <button class="btn-secondary" id="btnActionLink">Send Recovery Link</button>
                 <button class="btn-secondary" id="btnActionEscalate">Escalate to Human</button>
-                <button class="btn-secondary" id="btnActionCapture" style="background:#ecfdf5; color:#065f46; border-color:#a7f3d0;">Record Direct Capture</button>
-                <button class="btn-secondary" id="btnActionStop" style="color:#b91c1c;">Stop Workflow</button>
+                <button class="btn-secondary btn-capture" id="btnActionCapture">Record Direct Capture</button>
+                <button class="btn-secondary btn-stop" id="btnActionStop">Stop Workflow</button>
               </div>
             </div>
 
             <!-- Case Timeline -->
             <div class="panel">
-              <h4 style="font-size: 13px; margin-bottom: 8px;">Case Event Timeline</h4>
+              <h4 class="panel-subheading">Case Event Timeline</h4>
               <div id="detailTimeline" class="lifecycle-timeline"></div>
             </div>
           </div>
@@ -450,6 +471,20 @@
       <div class="panel-header"><div><h3>Customer directory</h3><p class="section-subtitle">Search by name, email, or external customer ID.</p></div><div class="directory-tools"><div class="search-field"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="customerSearchInput" type="search" placeholder="Search customers..."></div><select id="customerFilterSelect" class="select-control"><option value="all">All customers</option><option value="risk">At risk</option><option value="recovered">Recovered</option><option value="optout">Opted out</option></select></div></div>
       <div class="table-wrap"><table class="data-table customer-table"><thead><tr><th>Customer</th><th>Relationship</th><th>At risk</th><th>Recovered</th><th>Language</th><th>Consent</th><th>Last activity</th><th></th></tr></thead><tbody id="customersTableBody"></tbody></table></div>
     </section>
+
+    <!-- CUSTOMER TIMELINE DRAWER / MODAL -->
+    <div id="customerTimelineDrawer" class="hidden" role="dialog" aria-modal="true" aria-labelledby="customerTimelineTitle">
+      <section class="panel" style="border-top: 4px solid var(--brand-blue); margin-top: 20px;">
+        <div class="panel-header">
+          <div>
+            <span class="breadcrumb" id="customerTimelineBreadcrumb">CUSTOMER RELATIONSHIP</span>
+            <h3 id="customerTimelineTitle">Customer History & Timeline</h3>
+          </div>
+          <button id="closeCustomerTimelineBtn" class="btn-secondary" type="button">Close History</button>
+        </div>
+        <div id="customerTimelineContent"></div>
+      </section>
+    </div>
   </template>
 
   <!-- AI SANDBOX & BENCHMARKS TEMPLATE -->
@@ -494,11 +529,13 @@
         </form>
 
         <div style="margin-top:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <h4 style="font-size:12px; text-transform:uppercase; color:var(--text-muted); margin:0;">Structured AI Output</h4>
-            <div id="aiTelemetryBadge" style="font-size:11px; font-family:'JetBrains Mono', monospace; color:var(--text-muted);"></div>
+          <div class="ai-output-header">
+            <h4 class="ai-output-title">Structured AI Output</h4>
+            <div id="aiTelemetryBadge" class="telemetry-badge"></div>
           </div>
-          <pre id="aiResultJson" class="sandbox-result-box">Awaiting input...</pre>
+          <div id="aiResultJson" class="sandbox-result-box" aria-live="polite">
+            <div class="ai-empty-result"><span class="empty-icon blue">✦</span><b>Ready to read a customer message</b><small>The result will show intent, risk, and a reviewable recovery draft.</small></div>
+          </div>
         </div>
       </section>
 
@@ -561,6 +598,7 @@
               <th>Policy Result</th>
               <th>Policy Reason</th>
               <th>AI Intent</th>
+              <th>Decision Context</th>
             </tr>
           </thead>
           <tbody id="auditTableBody"></tbody>

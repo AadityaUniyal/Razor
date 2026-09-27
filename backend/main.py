@@ -18,6 +18,8 @@ from backend.routes.webhooks import router as webhooks_router
 from backend.routes.ai import router as ai_router
 from backend.routes.dashboard import router as dashboard_router
 from backend.routes.recovery import router as recovery_router
+from backend.routes.scheduler import router as scheduler_router
+from backend.routes.portal import router as portal_router
 from backend.services.scheduler import scheduler_loop, process_due_tasks
 from backend.services.websocket_manager import app_websockets, set_event_loop
 from database.connection import SessionLocal
@@ -87,6 +89,8 @@ app.include_router(webhooks_router)
 app.include_router(ai_router)
 app.include_router(dashboard_router)
 app.include_router(recovery_router)
+app.include_router(scheduler_router)
+app.include_router(portal_router)
 
 
 @app.get("/", response_class=HTMLResponse)

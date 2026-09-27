@@ -4,16 +4,16 @@ from hmac import compare_digest, new as hmac_new
 from typing import Any, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from backend.core.config import RAZORPAY_WEBHOOK_SECRET, INGEST_API_KEY
-from backend.core.security import get_current_user
+from backend.core.security import decrypt_secret, get_current_user
 from backend.core.tenancy import default_merchant
 from backend.services.policy_engine import to_case_dict, process_case
 from backend.services.websocket_manager import broadcast
 from database.connection import get_db
-from database.models import Customer, PaymentEvent, RecoveryCase, CaseEvent, SystemHealthEvent, SubscriptionContext, InvoiceContext, User, now_utc
+from database.models import Customer, IntegrationCredential, InvoiceContext, Merchant, PaymentEvent, RecoveryCase, CaseEvent, SubscriptionContext, SystemHealthEvent, User, now_utc
 
 router = APIRouter(prefix="/api", tags=["webhooks"])
 
@@ -61,7 +61,12 @@ def ingest_recovery_event(
     if not external_event_id:
         raise HTTPException(400, "external_event_id is required")
 
-    merchant_id = getattr(auth, "merchant_id", None) or default_merchant(db).id
+    if isinstance(auth, dict):
+        merchant_id = auth.get("merchant_id") or default_merchant(db).id
+    elif hasattr(auth, "merchant_id"):
+        merchant_id = getattr(auth, "merchant_id", None) or default_merchant(db).id
+    else:
+        merchant_id = default_merchant(db).id
 
     # 1. Event-level Idempotency Check
     existing_event = db.scalar(select(PaymentEvent).where(PaymentEvent.external_event_id == external_event_id))
@@ -179,13 +184,50 @@ def ingest_recovery_event(
     return {"ok": True, "case": to_case_dict(case), "result": result}
 
 
+def parse_razorpay_webhook_payload(payload: dict[str, Any], raw_body: bytes) -> dict[str, Any]:
+    """Extracts and normalizes payment and subscription fields from standard Razorpay webhooks."""
+    event_name = payload.get("event") or payload.get("event_type", "payment.failed")
+    payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+    sub_entity = payload.get("payload", {}).get("subscription", {}).get("entity", {})
+    external_id = payload.get("id") or payload.get("event_id") or payload.get("external_event_id")
+    if not external_id:
+        external_id = f"rzp_evt_{sha256(raw_body).hexdigest()[:24]}"
+
+    case_ref = payment_entity.get("order_id") or sub_entity.get("id") or payload.get("case_reference") or f"RC_{external_id[-8:]}"
+
+    raw_amount = payment_entity.get("amount") or sub_entity.get("plan_amount") or payload.get("amount")
+    if raw_amount is None:
+        raise HTTPException(400, "Webhook amount is required")
+    amount_inr = int(raw_amount)
+    if "amount" in payment_entity or "plan_amount" in sub_entity or str(payload.get("currency_unit", "inr")).lower() in {"paise", "minor"}:
+        amount_inr //= 100
+
+    notes = payment_entity.get("notes", {}) or sub_entity.get("notes", {})
+    customer_email = payment_entity.get("email") or sub_entity.get("customer_email") or "unknown@example.invalid"
+    customer_name = notes.get("customer_name") or customer_email
+    external_customer_id = payment_entity.get("customer_id") or sub_entity.get("customer_id") or customer_email
+
+    return {
+        "external_event_id": external_id,
+        "event_type": event_name,
+        "case_reference": case_ref,
+        "amount": amount_inr,
+        "customer_name": customer_name,
+        "customer_email": customer_email,
+        "external_customer_id": external_customer_id,
+        "message": payload.get("message", ""),
+        "failure_category": payload.get("failure_category", "UNCERTAIN_OR_TEMPORARY"),
+        "external_payment_id": payment_entity.get("id"),
+        "external_subscription_id": sub_entity.get("id"),
+    }
+
+
 @router.post("/webhooks/razorpay")
 async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     """
     Razorpay-compatible webhook receiver with HMAC-SHA256 signature verification.
     """
     raw_body = await request.body()
-    # Retrieve the webhook secret at request time to respect runtime environment changes
     secret = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
     if not secret:
         raise HTTPException(500, "Razorpay webhook secret not configured")
@@ -199,43 +241,48 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
     except json.JSONDecodeError as exc:
         raise HTTPException(400, "Webhook payload must be valid JSON") from exc
 
-    event_name = payload.get("event") or payload.get("event_type", "payment.failed")
-    payment_entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
-    sub_entity = payload.get("payload", {}).get("subscription", {}).get("entity", {})
-    external_id = payload.get("id") or payload.get("event_id") or payload.get("external_event_id")
-    if not external_id:
-        external_id = f"rzp_evt_{sha256(raw_body).hexdigest()[:24]}"
-
-    case_ref = payment_entity.get("order_id") or sub_entity.get("id") or payload.get("case_reference") or f"RC_{external_id[-8:]}"
-    
-    # Handle amounts in paise safely
-    raw_amount = payment_entity.get("amount") or sub_entity.get("plan_amount") or payload.get("amount")
-    if raw_amount is None:
-        raise HTTPException(400, "Webhook amount is required")
-    amount_inr = int(raw_amount)
-    # Razorpay entities use paise; generic internal payloads declare units.
-    if "amount" in payment_entity or "plan_amount" in sub_entity or str(payload.get("currency_unit", "inr")).lower() in {"paise", "minor"}:
-        amount_inr //= 100
-
-    notes = payment_entity.get("notes", {}) or sub_entity.get("notes", {})
-    customer_email = payment_entity.get("email") or sub_entity.get("customer_email") or "unknown@example.invalid"
-    customer_name = notes.get("customer_name") or customer_email
-    external_customer_id = payment_entity.get("customer_id") or sub_entity.get("customer_id") or customer_email
-
-    normalized = {
-        "external_event_id": external_id,
-        "event_type": event_name,
-        "case_reference": case_ref,
-        "amount": amount_inr,
-        "customer_name": customer_name,
-        "customer_email": customer_email,
-        "external_customer_id": external_customer_id,
-        "message": payload.get("message", ""),
-        "failure_category": payload.get("failure_category", "UNCERTAIN_OR_TEMPORARY"),
-        "external_payment_id": payment_entity.get("id"),
-        "external_subscription_id": sub_entity.get("id"),
-    }
+    normalized = parse_razorpay_webhook_payload(payload, raw_body)
     return ingest_recovery_event(normalized, db, auth="razorpay_signature_verified")
+
+
+@router.post("/webhooks/razorpay/{merchant_slug}")
+async def razorpay_merchant_webhook(merchant_slug: str, request: Request, db: Session = Depends(get_db)):
+    """
+    Tenant-scoped Razorpay webhook endpoint: validates signature against the merchant's
+    encrypted webhook secret and isolates all created events and cases to that merchant.
+    """
+    merchant = db.scalar(select(Merchant).where(Merchant.slug == merchant_slug))
+    if not merchant:
+        raise HTTPException(404, f"Merchant '{merchant_slug}' not found")
+
+    raw_body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+
+    # Look up tenant credential
+    credential = db.scalar(
+        select(IntegrationCredential)
+        .where(IntegrationCredential.merchant_id == merchant.id, IntegrationCredential.provider == "razorpay")
+        .order_by(desc(IntegrationCredential.id))
+    )
+    secret = None
+    if credential and credential.webhook_secret_ref:
+        secret = decrypt_secret(credential.webhook_secret_ref)
+    if not secret:
+        secret = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+    if not secret:
+        raise HTTPException(500, "Razorpay webhook secret not configured for merchant")
+
+    expected = hmac_new(secret.encode("utf-8"), raw_body, "sha256").hexdigest()
+    if not compare_digest(signature, expected):
+        raise HTTPException(401, f"Invalid Razorpay webhook signature for merchant '{merchant_slug}'")
+
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, "Webhook payload must be valid JSON") from exc
+
+    normalized = parse_razorpay_webhook_payload(payload, raw_body)
+    return ingest_recovery_event(normalized, db, auth={"merchant_id": merchant.id, "source": "tenant_webhook"})
 
 
 # Backwards-compatible alias for existing test suites & callers

@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Customer Payment Portal | RazorRescue</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .portal-container {
+      width: 100%;
+      max-width: 520px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+    }
+    .header {
+      text-align: center;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 24px;
+      margin-bottom: 24px;
+    }
+    .merchant-badge {
+      display: inline-block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 700;
+      color: #60a5fa;
+      background: rgba(37, 99, 235, 0.15);
+      padding: 4px 12px;
+      border-radius: 9999px;
+      margin-bottom: 12px;
+    }
+    .title {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+    .case-id {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+    .amount-card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .amount-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .amount-value {
+      font-size: 38px;
+      font-weight: 800;
+      color: #38bdf8;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+    .status-badge.due { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+    .status-badge.recovered { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+    .status-badge.waiting { background: rgba(96, 165, 250, 0.2); color: #93c5fd; }
+    .btn-pay {
+      display: block;
+      width: 100%;
+      background: var(--primary);
+      color: #ffffff;
+      text-align: center;
+      padding: 14px 20px;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: background 0.15s ease, transform 0.1s ease;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-pay:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+    .options-section {
+      margin-top: 24px;
+      border-top: 1px solid var(--card-border);
+      padding-top: 20px;
+    }
+    .option-toggle {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      font-size: 14px;
+      cursor: pointer;
+      text-decoration: underline;
+      display: block;
+      width: 100%;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    .option-toggle:hover { color: #f8fafc; }
+    .promise-form {
+      display: none;
+      background: rgba(15, 23, 42, 0.4);
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--card-border);
+      margin-top: 12px;
+    }
+    .form-group {
+      margin-bottom: 12px;
+      text-align: left;
+    }
+    .form-label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .form-input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 14px;
+    }
+    .btn-secondary {
+      width: 100%;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #475569;
+      background: #334155;
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .btn-secondary:hover { background: #475569; }
+    .footer {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 12px;
+      color: #64748b;
+    }
+    .opt-out-link {
+      color: #64748b;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .opt-out-link:hover { color: #94a3b8; }
+    .alert-banner {
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .alert-banner.success { background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #34d399; }
+    .alert-banner.info { background: rgba(37, 99, 235, 0.2); border: 1px solid #2563eb; color: #93c5fd; }
+  </style>
+</head>
+<body>
+
+  <div class="portal-container">
+    <div id="alertBanner" class="alert-banner"></div>
+
+    <div class="header">
+      <span class="merchant-badge" id="merchantName">Secured by RazorRescue</span>
+      <h1 class="title">Complete Your Payment</h1>
+      <div class="case-id">Reference: <span id="caseIdDisplay">{{CASE_ID}}</span></div>
+    </div>
+
+    <div class="amount-card">
+      <div class="amount-label">Amount Outstanding</div>
+      <div class="amount-value" id="amountDisplay">₹--</div>
+      <div id="statusBadge" class="status-badge due">Checking Status...</div>
+    </div>
+
+    <div id="payActionBlock">
+      <a id="payLinkBtn" href="#" target="_blank" class="btn-pay">
+        Pay Securely with Razorpay →
+      </a>
+    </div>
+
+    <div class="options-section">
+      <button class="option-toggle" id="togglePromiseBtn" onclick="togglePromise()">Need more time? Promise a payment date</button>
+      
+      <div id="promiseForm" class="promise-form">
+        <div class="form-group">
+          <label class="form-label" for="promiseDate">Expected Payment Date</label>
+          <input type="date" id="promiseDate" class="form-input">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="promiseNote">Note (optional)</label>
+          <input type="text" id="promiseNote" placeholder="e.g. Waiting for salary deposit" class="form-input">
+        </div>
+        <button class="btn-secondary" onclick="submitPromise()">Save Payment Commitment</button>
+      </div>
+
+      <div class="footer">
+        <p>Questions? Contact your merchant directly.</p>
+        <p style="margin-top: 8px;">
+          <a class="opt-out-link" onclick="handleOptOut()">Opt out from payment reminders</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const caseId = "{{CASE_ID}}";
+    let caseData = null;
+
+    async function loadPortalData() {
+      try {
+        const resp = await fetch(`/api/portal/${caseId}`);
+        if (!resp.ok) {
+          throw new Error("Unable to locate payment case");
+        }
+        caseData = await resp.json();
+        renderPortal(caseData);
+      } catch (err) {
+        showAlert("Error loading case details: " + err.message, "info");
+      }
+    }
+
+    function renderPortal(data) {
+      document.getElementById("caseIdDisplay").textContent = data.case_id;
+      document.getElementById("merchantName").textContent = data.merchant_name || "Merchant Billing";
+      document.getElementById("amountDisplay").textContent = "₹" + Number(data.amount).toLocaleString("en-IN");
+
+      const badge = document.getElementById("statusBadge");
+      const payBtn = document.getElementById("payLinkBtn");
+
+      if (data.recovered) {
+        badge.className = "status-badge recovered";
+        badge.textContent = "✓ Payment Received";
+        payBtn.style.display = "none";
+        showAlert("This payment has already been successfully completed. Thank you!", "success");
+      } else if (data.promise) {
+        badge.className = "status-badge waiting";
+        badge.textContent = "⏳ Promised for " + data.promise.promised_at.split("T")[0];
+        payBtn.href = data.payment_url;
+      } else {
+        badge.className = "status-badge due";
+        badge.textContent = "● Payment Due";
+        payBtn.href = data.payment_url;
+      }
+
+      // Min date is tomorrow
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      document.getElementById("promiseDate").min = tomorrow.toISOString().split("T")[0];
+    }
+
+    function togglePromise() {
+      const form = document.getElementById("promiseForm");
+      form.style.display = form.style.display === "block" ? "none" : "block";
+    }
+
+    async function submitPromise() {
+      const dateVal = document.getElementById("promiseDate").value;
+      const noteVal = document.getElementById("promiseNote").value;
+      if (!dateVal) {
+        alert("Please pick a future date.");
+        return;
+      }
+      try {
+        const resp = await fetch(`/api/portal/${caseId}/promise`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ promised_at: dateVal, note: noteVal })
+        });
+        const result = await resp.json();
+        if (resp.ok) {
+          showAlert(result.message || "Promise saved successfully!", "success");
+          document.getElementById("promiseForm").style.display = "none";
+          loadPortalData();
+        } else {
+          alert(result.detail || "Failed to submit promise");
+        }
+      } catch (err) {
+        alert("Network error: " + err.message);
+      }
+    }
+
+    async function handleOptOut() {
+      if (!confirm("Are you sure you want to stop receiving payment reminders for this account?")) {
+        return;
+      }
+      try {
+        const resp = await fetch(`/api/portal/${caseId}/opt-out`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        const result = await resp.json();
+        if (resp.ok) {
+          showAlert(result.message, "info");
+        }
+      } catch (err) {
+        alert("Failed to update preferences: " + err.message);
+      }
+    }
+
+    function showAlert(msg, type) {
+      const el = document.getElementById("alertBanner");
+      el.textContent = msg;
+      el.className = "alert-banner " + type;
+      el.style.display = "block";
+    }
+
+    // Initialize
+    loadPortalData();
+  </script>
+</body>
+</html>

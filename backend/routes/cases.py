@@ -1,6 +1,9 @@
+import csv
+import io
 from secrets import token_hex
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, desc
 from sqlalchemy.orm import Session
 
@@ -26,6 +29,62 @@ def list_cases(
     merchant_id = merchant_id_for_user(db, user)
     cases = db.scalars(select(RecoveryCase).where(tenant_filter(RecoveryCase, merchant_id)).order_by(desc(RecoveryCase.id)).offset(offset).limit(limit)).all()
     return [to_case_dict(c) for c in cases]
+
+
+@router.get("/cases/export/csv")
+def export_cases_csv(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Exports merchant's recovery cases as a downloadable CSV stream."""
+    merchant_id = merchant_id_for_user(db, user)
+    cases = db.scalars(
+        select(RecoveryCase)
+        .where(tenant_filter(RecoveryCase, merchant_id))
+        .order_by(desc(RecoveryCase.id))
+    ).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "case_id",
+        "merchant_id",
+        "customer_name",
+        "customer_email",
+        "amount",
+        "state",
+        "recovered",
+        "recovered_amount",
+        "retry_count",
+        "communication_count",
+        "current_action",
+        "created_at",
+        "updated_at",
+    ])
+    for c in cases:
+        writer.writerow([
+            c.case_id,
+            c.merchant_id,
+            c.customer_name,
+            c.customer_email,
+            c.amount,
+            c.state,
+            c.recovered,
+            c.recovered_amount,
+            c.retry_count,
+            c.communication_count,
+            c.current_action,
+            c.created_at.isoformat() if c.created_at else "",
+            c.updated_at.isoformat() if c.updated_at else "",
+        ])
+
+    output.seek(0)
+    filename = f"recovery_cases_{now_utc().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @router.get("/cases/{case_id}")
