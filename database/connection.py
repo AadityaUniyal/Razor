@@ -10,9 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Neon PostgreSQL cloud database connection.
-# Connection string is loaded strictly from environment variables.
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+# Neon PostgreSQL cloud database connection (with automatic local SQLite fallback).
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip() or "sqlite:///./razor_fallback.db"
 
 # Normalise URL for psycopg driver if standard postgresql:// prefix is given
 if DATABASE_URL.startswith("postgresql://"):
@@ -25,22 +24,25 @@ if DATABASE_URL.startswith("postgresql") and "connect_timeout=" not in DATABASE_
     DATABASE_URL = f"{DATABASE_URL}&connect_timeout=5" if "?" in DATABASE_URL else f"{DATABASE_URL}?connect_timeout=5"
 
 is_serverless = bool(os.getenv("VERCEL") or os.getenv("NOW_REGION") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+is_sqlite = DATABASE_URL.startswith("sqlite")
 
-engine_kwargs = {
+engine_kwargs: Dict[str, Any] = {
     "future": True,
-    "pool_pre_ping": True,
-    "pool_recycle": 300,
 }
 
-if is_serverless:
-    # Serverless lambdas should keep a lean pool to prevent exhausting Neon connection limits
-    engine_kwargs.update({"pool_size": 3, "max_overflow": 5, "pool_timeout": 10})
+if is_sqlite:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
 else:
-    engine_kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_timeout": 30})
-
-# LIFO reuses warm connections first and lets idle overflow connections expire
-# naturally, which is a better fit for Neon and bursty dashboard traffic.
-engine_kwargs["pool_use_lifo"] = True
+    engine_kwargs.update({
+        "pool_pre_ping": True,
+        "pool_recycle": 300,
+        "pool_use_lifo": True,
+    })
+    if is_serverless:
+        # Serverless lambdas should keep a lean pool to prevent exhausting Neon connection limits
+        engine_kwargs.update({"pool_size": 3, "max_overflow": 5, "pool_timeout": 10})
+    else:
+        engine_kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_timeout": 30})
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 

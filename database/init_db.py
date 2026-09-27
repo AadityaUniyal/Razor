@@ -84,23 +84,9 @@ def seed_data(db: Session) -> None:
 _db_initialized = False
 
 
-def init_db(force: bool = False):
-    """Initializes and migrates the database schema on Neon PostgreSQL and seeds initial records."""
-    global _db_initialized
-    if _db_initialized and not force:
-        return
-
+def _run_postgres_migrations(engine) -> None:
     from sqlalchemy import text
 
-    # Step 1: Serialize schema creation across test workers and server processes.
-    # PostgreSQL DDL takes relation locks; without this, concurrent cold starts can deadlock.
-    lock_conn = engine.connect()
-    lock_conn.execute(text("SELECT pg_advisory_lock(74201926)"))
-
-    # Ensure all tables and base schemas exist first.
-    Base.metadata.create_all(bind=engine)
-
-    # Step 2: Non-destructive DDL migrations & compound index creations
     with engine.connect() as conn:
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -228,11 +214,42 @@ def init_db(force: bool = False):
             """))
         conn.commit()
 
+
+def init_db(force: bool = False):
+    """Initializes and migrates the database schema on Neon PostgreSQL and seeds initial records."""
+    global _db_initialized
+    if _db_initialized and not force:
+        return
+
+    from sqlalchemy import text
+
+    is_postgres = engine.dialect.name == "postgresql"
+    lock_conn = None
+    if is_postgres:
+        # Step 1: Serialize schema creation across test workers and server processes.
+        # PostgreSQL DDL takes relation locks; without this, concurrent cold starts can deadlock.
+        try:
+            lock_conn = engine.connect()
+            lock_conn.execute(text("SELECT pg_advisory_lock(74201926)"))
+        except Exception:
+            lock_conn = None
+
+    # Ensure all tables and base schemas exist first.
+    Base.metadata.create_all(bind=engine)
+
+    if is_postgres:
+        _run_postgres_migrations(engine)
+
     with SessionLocal() as db:
         seed_data(db)
 
-    lock_conn.execute(text("SELECT pg_advisory_unlock(74201926)"))
-    lock_conn.close()
+    if lock_conn:
+        try:
+            lock_conn.execute(text("SELECT pg_advisory_unlock(74201926)"))
+        except Exception:
+            pass
+        finally:
+            lock_conn.close()
 
     _db_initialized = True
 
